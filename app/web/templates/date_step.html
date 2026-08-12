@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Дата начала страхования{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">Когда должна начать действовать страховка?</h1>
+  {% if error %}<p class="form__error">{{ error }}</p>{% endif %}
+
+  <form method="post" action="{{ form_action }}" class="form" id="date-form">
+    <label class="field">
+      <span class="field__label">Начало страхования</span>
+      <input type="date" name="start_date" id="start_date"
+             value="{{ start_date.isoformat() if start_date else '' }}" required>
+    </label>
+
+    <div class="field">
+      <span class="field__label">Окончание страхования</span>
+      <div class="field--readonly {% if not end_date %}is-empty{% endif %}" id="end-date-display">{% if end_date %}{{ end_date.strftime('%d.%m.%Y') }}{% else %}Рассчитается автоматически{% endif %}</div>
+      <span class="step__hint">Дата окончания рассчитывается по выбранному сроку страхования и не редактируется вручную.</span>
+    </div>
+
+    <div class="step-nav">
+      <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
+      <button type="submit" class="btn btn--primary btn--lg">{{ submit_label }}</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.INSURANCE_DATE_PREVIEW_URL = "{{ date_preview_url }}";
+</script>
+{% endblock %}

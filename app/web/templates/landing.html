@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "_flags.html" import flag_icon %}
+{% block title %}Автостраховка для поездок в Грузию, Армению, Турцию{% endblock %}
+{% block page_class %} page--home{% endblock %}
+{% block content %}
+
+<header class="site-header">
+  <!-- TODO: replace with real logo when available -->
+  <a class="brand" href="/">auto<span class="brand__dot">·</span>cover</a>
+
+  {% if contacts.telegram_url or contacts.max_url or contacts.vk_url %}
+  <nav class="header-contacts" aria-label="Поддержка">
+    {% if contacts.telegram_url %}
+    <a class="contact-link" href="{{ contacts.telegram_url }}" target="_blank" rel="noopener">
+      <svg class="contact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 3L11 13"/>
+        <path d="M21 3L14 21L11 13L3 10L21 3Z"/>
+      </svg>
+      <span>Telegram</span>
+    </a>
+    {% endif %}
+    {% if contacts.max_url %}
+    <a class="contact-link" href="{{ contacts.max_url }}" target="_blank" rel="noopener">
+      <svg class="contact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v9a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4H6.5A2.5 2.5 0 0 1 4 14.5v-9Z"/>
+      </svg>
+      <span>MAX</span>
+    </a>
+    {% endif %}
+    {% if contacts.vk_url %}
+    <a class="contact-link" href="{{ contacts.vk_url }}" target="_blank" rel="noopener">
+      <svg class="contact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/>
+        <circle cx="8.5" cy="12" r="0.6" fill="currentColor" stroke="none"/>
+        <circle cx="12" cy="12" r="0.6" fill="currentColor" stroke="none"/>
+        <circle cx="15.5" cy="12" r="0.6" fill="currentColor" stroke="none"/>
+      </svg>
+      <span>VK</span>
+    </a>
+    {% endif %}
+  </nav>
+  {% endif %}
+</header>
+
+<section class="hero-v2">
+  <div class="hero-v2__products">
+    <a class="product-block product-block--active" href="/start">
+      <span class="product-block__flag">{{ flag_icon('ge') }}</span>
+      <span class="product-block__body">
+        <span class="product-block__title">ОСАГО для поездки<br>в Грузию</span>
+        {% if ge_price_rub %}
+        <span class="product-block__price">от {{ ge_price_rub | rub }} ₽</span>
+        {% endif %}
+      </span>
+      <span class="product-block__arrow" aria-hidden="true">→</span>
+    </a>
+
+    <div class="product-block product-block--soon" aria-disabled="true">
+      <span class="product-block__flag">{{ flag_icon('am') }}</span>
+      <span class="product-block__body">
+        <span class="product-block__title">ОСАГО для поездки<br>в Армению</span>
+        <span class="product-block__soon-label">Скоро</span>
+      </span>
+      <span class="product-block__arrow" aria-hidden="true">→</span>
+    </div>
+
+    <div class="product-block product-block--soon" aria-disabled="true">
+      <span class="product-block__flag">{{ flag_icon('tr') }}</span>
+      <span class="product-block__body">
+        <span class="product-block__title">ОСАГО для поездки<br>в Турцию</span>
+        <span class="product-block__soon-label">Скоро</span>
+      </span>
+      <span class="product-block__arrow" aria-hidden="true">→</span>
+    </div>
+  </div>
+
+  <div class="hero-v2__visual">
+    {% include "_hero_visual.html" %}
+  </div>
+</section>
+
+{% endblock %}

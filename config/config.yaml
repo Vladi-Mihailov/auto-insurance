@@ -1,0 +1,36 @@
+# Non-secret structural configuration for auto-insurance.
+# Secrets (payment requisites, cookie key, DB path override) live in .env — see .env.example.
+#
+# Prices are RUB (whole rubles); converted to minor units (kopecks) in code.
+# Do NOT hardcode prices in templates/handlers — always read them from here.
+#
+# Periods here (15d/30d/90d/1y) match tpl.ge's Georgia product structure —
+# see app/dates/rules.py for the date-math and app/catalog/ for vehicle
+# categories/manufacturers/models (all synced from tpl.ge, not hand-typed).
+#
+# price_rub: null means "period exists, price NOT YET CONFIGURED" — the
+# checkout must show this as configuration-required, never guess a number.
+# 15d/30d/90d RUB prices below were confirmed by business on 2026-08-12.
+# 1y is still not confirmed — leave it null until it is; do not invent one.
+
+pricing:
+  GE:
+    passenger_car:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 1299
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 2000
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 4500
+      - code: "1y"
+        label: "1 год"
+        price_rub: null   # TODO: NOT CONFIGURED — needs business price
+    # Other categories (motorcycle, bus, truck, trailer, special_vehicle) are
+    # synced into the catalog (so they're selectable/visible on the category
+    # screen) but deliberately have no pricing.GE.<category> entry at all yet
+    # — the category screen shows them as "Скоро" until both business pricing
+    # and the rest of their checkout are ready. Do not add periods here for
+    # them without also confirming real RUB prices.

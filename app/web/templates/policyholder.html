@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Страховщик{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">Страховщик</h1>
+
+  <div class="radio-group radio-group--entity">
+    <label class="radio-option is-selected">
+      <input type="radio" name="entity_type" value="individual" checked>
+      <span>Физическое лицо</span>
+    </label>
+    <label class="radio-option radio-option--disabled" aria-disabled="true">
+      <input type="radio" name="entity_type" value="legal" disabled>
+      <span>Юридическое лицо</span>
+      <span class="choice-card__soon-label">Скоро</span>
+    </label>
+  </div>
+
+  <form method="post" action="{{ form_action }}" class="form" novalidate>
+    <label class="field">
+      <span class="field__label">ФИО</span>
+      <input type="text" name="full_name" value="{{ full_name or '' }}" placeholder="Иванов Иван Иванович" autocomplete="off">
+      {% if errors.full_name %}<span class="field__error">{{ errors.full_name }}</span>{% endif %}
+    </label>
+
+    <span class="field__label">Куда отправить готовый полис?</span>
+    <div class="radio-group">
+      {% for type_code, type_label in [("telegram","Telegram"), ("max","MAX"), ("phone","Телефон"), ("other","Другое")] %}
+      <label class="radio-option">
+        <input type="radio" name="contact_type" value="{{ type_code }}" {% if selected_type == type_code %}checked{% endif %} required>
+        <span>{{ type_label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+
+    <label class="field">
+      <span class="field__label">Контакт</span>
+      <input type="text" name="contact_value" value="{{ contact_value or '' }}" placeholder="@username или +995 555 12 34 56" autocomplete="off">
+      {% if errors.contact_value %}<span class="field__error">{{ errors.contact_value }}</span>{% endif %}
+    </label>
+
+    <div class="step-nav">
+      <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
+      <button type="submit" class="btn btn--primary btn--lg">{{ submit_label }}</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

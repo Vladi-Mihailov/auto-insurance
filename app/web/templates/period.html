@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Срок страхования{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">На какой срок нужна страховка?</h1>
+  {% if error %}<p class="form__error">{{ error }}</p>{% endif %}
+
+  <form method="post" action="/o/{{ order.resume_token }}/period" class="choice-grid choice-grid--periods">
+    {% for period in periods %}
+    <button type="submit" name="period_code" value="{{ period.code }}"
+            class="choice-card choice-card--period {% if selected == period.code %}is-selected{% endif %}">
+      <span class="choice-card__title">{{ period.label }}</span>
+      <span class="choice-card__price">{{ period.price_rub | rub }} ₽</span>
+    </button>
+    {% endfor %}
+  </form>
+</section>
+{% endblock %}

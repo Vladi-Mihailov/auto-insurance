@@ -1,0 +1,43 @@
+{# Small rounded-rect flag chips — not relying on system emoji rendering. #}
+
+{% macro flag_icon(country) %}
+{% if country == 'ge' %}
+<svg class="flag-icon" viewBox="0 0 40 28" aria-hidden="true">
+  <clipPath id="flagClipGe"><rect width="40" height="28" rx="6"/></clipPath>
+  <g clip-path="url(#flagClipGe)">
+    <rect width="40" height="28" fill="#fefefe"/>
+    <rect x="16" width="8" height="28" fill="#c8302b"/>
+    <rect y="10" width="40" height="8" fill="#c8302b"/>
+    <g fill="#c8302b">
+      <rect x="6.8" y="1" width="2.4" height="8"/>
+      <rect x="4" y="3.8" width="8" height="2.4"/>
+      <rect x="30.8" y="1" width="2.4" height="8"/>
+      <rect x="28" y="3.8" width="8" height="2.4"/>
+      <rect x="6.8" y="19" width="2.4" height="8"/>
+      <rect x="4" y="21.8" width="8" height="2.4"/>
+      <rect x="30.8" y="19" width="2.4" height="8"/>
+      <rect x="28" y="21.8" width="8" height="2.4"/>
+    </g>
+  </g>
+</svg>
+{% elif country == 'am' %}
+<svg class="flag-icon" viewBox="0 0 40 28" aria-hidden="true">
+  <clipPath id="flagClipAm"><rect width="40" height="28" rx="6"/></clipPath>
+  <g clip-path="url(#flagClipAm)">
+    <rect width="40" height="28" fill="#d0021b"/>
+    <rect y="9" width="40" height="10" fill="#0033a0"/>
+    <rect y="19" width="40" height="9" fill="#f8b400"/>
+  </g>
+</svg>
+{% elif country == 'tr' %}
+<svg class="flag-icon" viewBox="0 0 40 28" aria-hidden="true">
+  <clipPath id="flagClipTr"><rect width="40" height="28" rx="6"/></clipPath>
+  <g clip-path="url(#flagClipTr)">
+    <rect width="40" height="28" fill="#d81e2c"/>
+    <circle cx="16" cy="14" r="7.2" fill="#fefefe"/>
+    <circle cx="19" cy="14" r="6" fill="#d81e2c"/>
+    <polygon points="0,-3 0.71,-0.97 2.85,-0.93 1.14,0.37 1.76,2.43 0,1.2 -1.76,2.43 -1.14,0.37 -2.85,-0.93 -0.71,-0.97" fill="#fefefe" transform="translate(26,14)"/>
+  </g>
+</svg>
+{% endif %}
+{% endmacro %}

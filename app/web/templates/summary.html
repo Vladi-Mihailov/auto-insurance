@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Проверьте данные{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">ОСАГО Грузии</h1>
+
+  <div class="summary-card">
+    <div class="summary-section">
+      <div class="summary-section__header">
+        <span class="summary-section__title">Транспорт</span>
+        <a class="summary-section__edit" href="/o/{{ order.resume_token }}/edit-vehicle">Изменить</a>
+      </div>
+      {% if category_name %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Категория</span>
+        <span>{{ category_name }}</span>
+      </div>
+      {% endif %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Регистрационный номер</span>
+        <span>{{ order.display_registration_number }}</span>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">{{ "Номер шасси" if order.display_identifier_type == "chassis" else "VIN" }}</span>
+        <span>{{ order.display_identifier }}</span>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">Производитель / модель</span>
+        <span>{{ manufacturer_name }} {{ model_name }}</span>
+      </div>
+    </div>
+
+    <div class="summary-section">
+      <div class="summary-section__header">
+        <span class="summary-section__title">Страхование</span>
+        <a class="summary-section__edit" href="/o/{{ order.resume_token }}/edit-coverage">Изменить</a>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">Срок</span>
+        <span>{{ period_label }}</span>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">Дата начала</span>
+        <span>{{ order.start_date.strftime('%d.%m.%Y') }}</span>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">Дата окончания</span>
+        <span>{{ order.end_date.strftime('%d.%m.%Y') }}</span>
+      </div>
+    </div>
+
+    <div class="summary-section">
+      <div class="summary-section__header">
+        <span class="summary-section__title">Страховщик</span>
+        <a class="summary-section__edit" href="/o/{{ order.resume_token }}/edit-policyholder">Изменить</a>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">ФИО</span>
+        <span>{{ order.full_name }}</span>
+      </div>
+      <div class="summary-card__row">
+        <span class="summary-card__label">Контакт</span>
+        <span>{{ order.contact_value }}</span>
+      </div>
+    </div>
+
+    <div class="summary-card__total">
+      <span>К оплате</span>
+      <span class="summary-card__price">{{ (order.price_customer_minor // 100) | rub }} ₽</span>
+    </div>
+  </div>
+
+  <form method="post" action="/o/{{ order.resume_token }}/summary" class="summary-actions">
+    <button type="submit" name="action" value="pay" class="btn btn--primary btn--lg btn--block">Перейти к оплате</button>
+  </form>
+</section>
+{% endblock %}

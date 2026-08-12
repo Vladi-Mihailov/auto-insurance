@@ -1,0 +1,22 @@
+# TEST-ONLY pricing fixture — never used by the real app. Production
+# config/config.yaml deliberately has price_rub: null for all new periods
+# (business hasn't confirmed real RUB prices yet). Tests need a fully priced
+# config to exercise the happy path end-to-end, so they point INSURANCE_CONFIG_FILE
+# at this file instead (see tests/conftest.py) rather than faking numbers in
+# the real config.
+
+pricing:
+  GE:
+    passenger_car:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 1500
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 2500
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 4500
+      - code: "1y"
+        label: "1 год"
+        price_rub: 9000

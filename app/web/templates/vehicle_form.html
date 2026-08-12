@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Данные транспортного средства{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">Данные транспортного средства</h1>
+
+  <form method="post" action="{{ form_action }}" class="form" novalidate>
+    <label class="field">
+      <span class="field__label">Регистрационный номер</span>
+      <input type="text" name="registration_number" value="{{ values.registration_number or '' }}" placeholder="A123AA777" class="field__input--upper" autocomplete="off">
+      {% if errors.registration_number %}<span class="field__error">{{ errors.registration_number }}</span>{% endif %}
+    </label>
+
+    <div class="field">
+      <span class="field__label">Выберите идентификатор</span>
+      <div class="segmented" id="identifier-type-toggle">
+        <label class="segmented__option {% if (values.identifier_type or 'vin') == 'vin' %}is-active{% endif %}">
+          <input type="radio" name="identifier_type" value="vin" {% if (values.identifier_type or 'vin') == 'vin' %}checked{% endif %}>
+          <span>VIN номер</span>
+        </label>
+        <label class="segmented__option {% if values.identifier_type == 'chassis' %}is-active{% endif %}">
+          <input type="radio" name="identifier_type" value="chassis" {% if values.identifier_type == 'chassis' %}checked{% endif %}>
+          <span>Номер шасси</span>
+        </label>
+      </div>
+    </div>
+
+    <label class="field">
+      <span class="field__label" id="identifier-label">{{ "Номер шасси" if values.identifier_type == "chassis" else "VIN номер" }}</span>
+      <input type="text" name="identifier" id="identifier-input" value="{{ values.identifier or '' }}" placeholder="JT123456789012345" class="field__input--mono field__input--upper" autocomplete="off">
+      {% if errors.identifier %}<span class="field__error">{{ errors.identifier }}</span>{% endif %}
+    </label>
+
+    <div class="field">
+      <span class="field__label">Производитель</span>
+      <div class="picker" id="manufacturer-picker">
+        <button type="button" class="picker__trigger" id="manufacturer-trigger">
+          <span class="picker__trigger-text" id="manufacturer-trigger-text">{{ manufacturer_name or "Выберите" }}</span>
+          <span class="picker__chevron" aria-hidden="true">⌄</span>
+        </button>
+        <input type="hidden" name="manufacturer_id" id="manufacturer_id" value="{{ values.manufacturer_id or '' }}">
+        <div class="picker__panel" id="manufacturer-panel" hidden>
+          <input type="text" class="picker__search" id="manufacturer-search" placeholder="Поиск">
+          <div class="picker__list" id="manufacturer-list"></div>
+        </div>
+      </div>
+      {% if errors.manufacturer_id %}<span class="field__error">{{ errors.manufacturer_id }}</span>{% endif %}
+    </div>
+
+    <div class="field">
+      <span class="field__label">Модель</span>
+      <div class="picker {% if not values.manufacturer_id %}picker--disabled{% endif %}" id="model-picker">
+        <button type="button" class="picker__trigger" id="model-trigger" {% if not values.manufacturer_id %}disabled{% endif %}>
+          <span class="picker__trigger-text" id="model-trigger-text">{{ model_name or "Выберите" }}</span>
+          <span class="picker__chevron" aria-hidden="true">⌄</span>
+        </button>
+        <input type="hidden" name="model_id" id="model_id" value="{{ values.model_id or '' }}">
+        <div class="picker__panel" id="model-panel" hidden>
+          <input type="text" class="picker__search" id="model-search" placeholder="Поиск">
+          <div class="picker__list" id="model-list"></div>
+        </div>
+      </div>
+      {% if errors.model_id %}<span class="field__error">{{ errors.model_id }}</span>{% endif %}
+      <span class="step__hint">Если модели нет в списке, выберите «Other».</span>
+    </div>
+
+    <div class="step-nav">
+      <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
+      <button type="submit" class="btn btn--primary btn--lg">Далее</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/catalog_picker.js"></script>
+<script>
+  document.querySelectorAll('#identifier-type-toggle input[name="identifier_type"]').forEach(function (input) {
+    input.addEventListener("change", function () {
+      document.querySelectorAll("#identifier-type-toggle .segmented__option").forEach(function (opt) {
+        opt.classList.remove("is-active");
+      });
+      input.closest(".segmented__option").classList.add("is-active");
+      document.getElementById("identifier-label").textContent = input.value === "chassis" ? "Номер шасси" : "VIN номер";
+    });
+  });
+</script>
+{% endblock %}

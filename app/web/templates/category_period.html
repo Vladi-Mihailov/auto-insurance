@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Категория и срок страхования{% endblock %}
+{% block content %}
+{% set icons = {
+  "motorcycle": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17" r="2.5"/><circle cx="18.5" cy="17" r="2.5"/><path d="M8 17h6.5l2-5H12l-1.5-3H7"/><path d="M14.5 12l2 5"/><path d="M4 12h2.5"/></svg>',
+  "passenger_car": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l1.2-4.8A2 2 0 0 1 6.14 9.6h11.72a2 2 0 0 1 1.94 1.6L21 16"/><path d="M3 16h18v2a1 1 0 0 1-1 1h-1.5a1 1 0 0 1-1-1v-.5H6.5V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2Z"/><circle cx="7" cy="16.5" r="1.5"/><circle cx="17" cy="16.5" r="1.5"/></svg>',
+  "bus": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M3 11h18"/><path d="M7 17v2M17 17v2"/><path d="M7 8h3M12 8h3"/></svg>',
+  "truck": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h9v9H3z"/><path d="M12 11h4l3 3v2h-7z"/><circle cx="7" cy="18" r="1.6"/><circle cx="16.5" cy="18" r="1.6"/></svg>',
+  "trailer": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14h4"/><rect x="6" y="8" width="15" height="7" rx="1"/><circle cx="10" cy="17.5" r="1.6"/><circle cx="17" cy="17.5" r="1.6"/></svg>',
+  "special_vehicle": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17h4v-4l6-5"/><path d="M13 8l4 3-2 3"/><circle cx="6" cy="18.5" r="1.6"/><circle cx="16" cy="18.5" r="1.6"/><path d="M17 15h3v3.5h-3z"/></svg>',
+} %}
+{% set check_icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>' %}
+
+<section class="step">
+  <h1 class="step__title">Выберите транспорт</h1>
+
+  <form method="post" action="{{ form_action }}" class="form" id="category-period-form">
+    <div class="choice-grid choice-grid--categories">
+      {% for category in categories %}
+      <button type="button"
+              class="choice-card choice-card--category {% if selected_category == category.code %}is-selected{% endif %}"
+              data-category-code="{{ category.code }}"
+              data-category-name="{{ category.name }}">
+        {% if selected_category == category.code %}<span class="choice-card__check">{{ check_icon | safe }}</span>{% endif %}
+        <span class="choice-card__vehicle-icon">{{ icons.get(category.code, icons["passenger_car"]) | safe }}</span>
+        <span class="choice-card__title">{{ category.name }}</span>
+      </button>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="category_code" id="category_code" value="{{ selected_category }}">
+
+    <h2 class="step__title step__title--sm">Срок страхования</h2>
+    {% if error %}<p class="form__error">{{ error }}</p>{% endif %}
+    <div class="choice-grid choice-grid--periods" id="period-grid">
+      {% for period in periods %}
+      <button type="button" data-period-code="{{ period.code }}"
+              class="choice-card choice-card--period {% if selected_period == period.code %}is-selected{% endif %} {% if not period.is_priced %}is-unavailable{% endif %}"
+              {% if not period.is_priced %}disabled{% endif %}>
+        <span class="choice-card__title">{{ period.label }}</span>
+        {% if period.is_priced %}
+        <span class="choice-card__price">{{ period.price_rub | rub }} ₽</span>
+        {% else %}
+        <span class="choice-card__soon-label">Цена уточняется</span>
+        {% endif %}
+      </button>
+      {% else %}
+      <p class="step__text">Эта категория скоро будет доступна.</p>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="period_code" id="period_code" value="{{ selected_period or '' }}">
+
+    <div class="step-nav">
+      <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
+      <button type="submit" class="btn btn--primary btn--lg" id="cp-next-btn" disabled>{{ submit_label }}</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.INSURANCE_PERIODS_URL = "/api/periods";
+</script>
+<script src="/static/js/category_period.js"></script>
+{% endblock %}

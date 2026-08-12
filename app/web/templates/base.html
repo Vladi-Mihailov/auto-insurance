@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ОСАГО Грузии — оформить страховку{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="page{% block page_class %}{% endblock %}">
+    {% if steps %}
+    <nav class="progress" aria-label="Этапы оформления">
+      <ol class="progress__row">
+        {% for step in steps %}
+        <li class="progress__step is-{{ step.state }}">
+          {% if step.url %}
+          <a href="{{ step.url }}" class="progress__num">{{ step.index }}</a>
+          {% else %}
+          <span class="progress__num">{{ step.index }}</span>
+          {% endif %}
+          <span class="progress__label">{{ step.label }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+      {% for step in steps if step.state == "active" %}
+      <p class="progress__current-label">Шаг {{ step.index }} из {{ steps|length }} — {{ step.label }}</p>
+      {% endfor %}
+    </nav>
+    {% endif %}
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="/static/js/main.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

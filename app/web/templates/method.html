@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Как заполнить данные?{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">Как удобнее заполнить данные?</h1>
+
+  <form method="post" action="/method" class="choice-grid">
+    <button type="submit" name="choice" value="documents" class="choice-card">
+      <span class="choice-card__icon">📄</span>
+      <span class="choice-card__title">Загрузить документы</span>
+      <span class="choice-card__hint">Распознаем данные автоматически</span>
+    </button>
+    <button type="submit" name="choice" value="manual" class="choice-card">
+      <span class="choice-card__icon">✍️</span>
+      <span class="choice-card__title">Заполнить вручную</span>
+      <span class="choice-card__hint">Займёт пару минут</span>
+    </button>
+  </form>
+
+  <div class="step-nav step-nav--start">
+    <a href="/date" class="btn btn--ghost btn--lg">Назад</a>
+  </div>
+</section>
+{% endblock %}

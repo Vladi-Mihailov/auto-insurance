@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Оплата{% endblock %}
+{% block content %}
+<section class="step">
+  <h1 class="step__title">Оплата</h1>
+
+  <div class="payment-amount">
+    <span class="payment-amount__label">К оплате</span>
+    <span class="payment-amount__value">{{ (order.price_customer_minor // 100) | rub }} ₽</span>
+  </div>
+
+  <p class="step__text">Переведите точную сумму:</p>
+
+  <div class="payment-card">
+    <span class="payment-card__bank">{{ payment.bank_name }}</span>
+    <span class="payment-card__number" id="card-number">{{ payment.card_number }}</span>
+    <span class="payment-card__holder">{{ payment.card_holder }}</span>
+    <button type="button" class="btn btn--ghost btn--sm" id="copy-card-btn" data-copy-target="card-number">Скопировать номер карты</button>
+  </div>
+
+  <div class="payment-qr">
+    <div class="payment-qr__placeholder">QR оплаты<br><span class="payment-qr__hint">появится позже</span></div>
+  </div>
+
+  <p class="step__text">После перевода загрузите чек:</p>
+  <button type="button" class="btn btn--primary btn--lg btn--block" id="upload-receipt-btn">Загрузить чек</button>
+  <p class="step__hint" id="upload-receipt-hint" hidden>Загрузка чека будет подключена на следующем этапе.</p>
+
+  <div class="step-nav step-nav--start">
+    <a href="/o/{{ order.resume_token }}/summary" class="btn btn--ghost btn--lg">Назад</a>
+  </div>
+</section>
+{% endblock %}
