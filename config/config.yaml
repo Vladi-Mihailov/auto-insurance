@@ -4,33 +4,61 @@
 # Prices are RUB (whole rubles); converted to minor units (kopecks) in code.
 # Do NOT hardcode prices in templates/handlers — always read them from here.
 #
-# Periods here (15d/30d/90d/1y) match tpl.ge's Georgia product structure —
+# Periods here (15d/30d/90d) match tpl.ge's Georgia product structure —
 # see app/dates/rules.py for the date-math and app/catalog/ for vehicle
 # categories/manufacturers/models (all synced from tpl.ge, not hand-typed).
 #
 # price_rub: null means "period exists, price NOT YET CONFIGURED" — the
 # checkout must show this as configuration-required, never guess a number.
-# 15d/30d/90d RUB prices below were confirmed by business on 2026-08-12.
-# 1y is still not confirmed — leave it null until it is; do not invent one.
+#
+# 1-year (1y) is INTENTIONALLY ABSENT, not just unpriced: we cannot sell a
+# 1-year policy at all right now, so it must not exist as a selectable (or
+# even disabled/"price uncertain") period for any category. Do not re-add a
+# "1y" entry anywhere below without a product decision to actually sell it
+# again — app.dates.rules.GeorgiaDateRule still supports the 1y date-math
+# for legacy orders/resume, which is unaffected by this config.
+#
+# 15d/30d/90d RUB prices below were confirmed by business on 2026-08-13.
 
 pricing:
   GE:
     passenger_car:
       - code: "15d"
         label: "15 дней"
-        price_rub: 1299
+        price_rub: 1349
       - code: "30d"
         label: "30 дней"
-        price_rub: 2000
+        price_rub: 2149
       - code: "90d"
         label: "90 дней"
-        price_rub: 4500
-      - code: "1y"
-        label: "1 год"
-        price_rub: null   # TODO: NOT CONFIGURED — needs business price
-    # Other categories (motorcycle, bus, truck, trailer, special_vehicle) are
-    # synced into the catalog (so they're selectable/visible on the category
-    # screen) but deliberately have no pricing.GE.<category> entry at all yet
-    # — the category screen shows them as "Скоро" until both business pricing
-    # and the rest of their checkout are ready. Do not add periods here for
-    # them without also confirming real RUB prices.
+        price_rub: 3649
+    # Motorcycle RUB tariffs confirmed by business on 2026-08-13. tpl.ge
+    # research (same date) confirmed motorcycle reuses passenger_car's exact
+    # checkout flow/vehicle-fields/catalog with no category-specific code
+    # needed -- see the research report for evidence. 1y intentionally
+    # absent, same rule as passenger_car above.
+    motorcycle:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 1059
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 1549
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 2899
+    # Other categories (bus, truck, trailer, special_vehicle) are synced into
+    # the catalog (so they're selectable/visible on the category screen) but
+    # deliberately have no pricing.GE.<category> entry at all yet — the
+    # category screen shows them as "Скоро" until both business pricing and
+    # the rest of their checkout are ready. Do not add periods here for them
+    # without also confirming real RUB prices.
+    #
+    # Trailer RUB tariffs have been confirmed by business (15d=849/30d=1249/
+    # 90d=1799 -- GE-tariff figures are reference only, RUB is the product
+    # source of truth), but are deliberately NOT added here yet: adding a
+    # pricing entry is the only gate this app currently has for "this
+    # category is fully sellable" (see category_period.html), and trailer's
+    # vehicle-fields/catalog/API behavior on tpl.ge has not been researched
+    # yet (unlike motorcycle above). Do not wire these prices in until that
+    # research confirms the rest of the checkout is ready for them.

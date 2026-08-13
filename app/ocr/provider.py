@@ -41,7 +41,7 @@ class _VehicleFieldsSchema(BaseModel):
 
 
 _SYSTEM_PROMPT = (
-    "Ты анализируешь изображение автомобильного документа.\n\n"
+    "Ты анализируешь изображение документа транспортного средства.\n\n"
     "Извлеки только:\n"
     "registration_number\n"
     "vin\n"

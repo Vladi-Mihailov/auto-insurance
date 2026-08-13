@@ -616,9 +616,10 @@ def test_progress_nav_only_links_completed_steps():
 
 
 def test_production_pricing_confirmed_for_ge_passenger_car(monkeypatch):
-    """Business confirmed 15d/30d/90d RUB prices on 2026-08-12 -- checks the
-    REAL config/config.yaml (not the tests/fixtures/ dummy pricing) has
-    them wired correctly, and that 1y is still deliberately unpriced."""
+    """Business confirmed updated 15d/30d/90d RUB prices on 2026-08-13 --
+    checks the REAL config/config.yaml (not the tests/fixtures/ dummy
+    pricing) has them wired correctly, and that 1y no longer exists as a
+    period at all (not just unpriced -- we can't sell a 1-year policy)."""
     monkeypatch.delenv("INSURANCE_CONFIG_FILE", raising=False)
     from app.deps import PROJECT_ROOT
     from app.pricing.provider import available_periods
@@ -626,11 +627,10 @@ def test_production_pricing_confirmed_for_ge_passenger_car(monkeypatch):
 
     settings = load_settings(PROJECT_ROOT)
     periods = {p.code: p for p in available_periods(settings, "GE", "passenger_car")}
-    assert periods["15d"].price_rub == 1299
-    assert periods["30d"].price_rub == 2000
-    assert periods["90d"].price_rub == 4500
-    assert periods["1y"].price_rub is None
-    assert periods["1y"].is_priced is False
+    assert periods["15d"].price_rub == 1349
+    assert periods["30d"].price_rub == 2149
+    assert periods["90d"].price_rub == 3649
+    assert "1y" not in periods
 
 
 @pytest.fixture
@@ -663,7 +663,10 @@ def test_category_period_unblocked_with_real_production_prices(real_production_c
     assert response.headers["location"] == "/date"
 
 
-def test_cannot_continue_checkout_with_unpriced_1y_against_real_config(real_production_config):
+def test_cannot_select_1y_period_since_it_no_longer_exists_against_real_config(real_production_config):
+    """1y isn't just unpriced anymore -- it's absent from config entirely
+    (we can't sell a 1-year policy), so submitting it hits the "unknown
+    period" branch, not the "not priced yet" one."""
     real_client = TestClient(app)
     response = real_client.post(
         "/category-period",
@@ -671,7 +674,24 @@ def test_cannot_continue_checkout_with_unpriced_1y_against_real_config(real_prod
         follow_redirects=False,
     )
     assert response.status_code == 422
-    assert "не настроена" in response.text
+    assert "Выберите один из доступных периодов" in response.text
+
+
+def test_category_period_screen_never_renders_a_1y_card_against_real_config(real_production_config):
+    real_client = TestClient(app)
+    response = real_client.get("/category-period")
+    assert response.status_code == 200
+    assert "1 год" not in response.text
+    assert 'data-period-code="1y"' not in response.text
+    assert "Цена уточняется" not in response.text
+
+
+def test_api_periods_for_passenger_car_excludes_1y_against_real_config(real_production_config):
+    real_client = TestClient(app)
+    response = real_client.get("/api/periods", params={"category_code": "passenger_car"})
+    assert response.status_code == 200
+    codes = [p["code"] for p in response.json()]
+    assert codes == ["15d", "30d", "90d"]
 
 
 def test_category_period_screen_has_no_summary_or_info_block():
@@ -842,9 +862,10 @@ def test_post_order_editing_updates_the_same_order_never_creates_a_duplicate():
     assert _count_orders() == before_count + 1  # still exactly one order created
 
 
-def test_edit_coverage_rejects_unpriced_1y_and_does_not_touch_the_order(real_production_config):
-    """Uses the real config (1y is genuinely unpriced there) rather than the
-    test fixture, which prices 1y for other tests' convenience."""
+def test_edit_coverage_rejects_1y_and_does_not_touch_the_order(real_production_config):
+    """Uses the real config (1y doesn't exist there at all -- we can't sell
+    a 1-year policy) rather than the test fixture, which prices 1y for
+    other tests' convenience (e.g. exercising the 1-year date math)."""
     client_ = TestClient(app)
     resume_token = _create_full_order(client_)
 
