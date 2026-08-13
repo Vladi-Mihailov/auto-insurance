@@ -2,7 +2,10 @@
 {% block title %}Данные транспортного средства{% endblock %}
 {% block content %}
 <section class="step">
-  <h1 class="step__title">Данные транспортного средства</h1>
+  <h1 class="step__title">{{ "Проверьте данные" if values.data_entry_method == "documents" else "Данные транспортного средства" }}</h1>
+  {% if values.data_entry_method == "documents" %}
+  <p class="step__text">Мы заполнили то, что удалось распознать. Проверьте данные перед продолжением.</p>
+  {% endif %}
 
   <form method="post" action="{{ form_action }}" class="form" novalidate>
     <label class="field">
@@ -45,6 +48,9 @@
         </div>
       </div>
       {% if errors.manufacturer_id %}<span class="field__error">{{ errors.manufacturer_id }}</span>{% endif %}
+      {% if not values.manufacturer_id and values.ocr_manufacturer_hint %}
+      <span class="step__hint">Распознано: «{{ values.ocr_manufacturer_hint }}» — выберите производителя из списка.</span>
+      {% endif %}
     </div>
 
     <div class="field">
@@ -61,6 +67,9 @@
         </div>
       </div>
       {% if errors.model_id %}<span class="field__error">{{ errors.model_id }}</span>{% endif %}
+      {% if not values.model_id and values.ocr_model_hint %}
+      <span class="step__hint">Распознано: «{{ values.ocr_model_hint }}» — выберите модель из списка.</span>
+      {% endif %}
       <span class="step__hint">Если модели нет в списке, выберите «Other».</span>
     </div>
 

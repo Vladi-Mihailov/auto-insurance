@@ -8,16 +8,20 @@ catalog endpoints the vehicle-details picker calls.
 """
 
 import sqlite3
+import time
 from datetime import date
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.analytics.repository import log_event
 from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
 from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode
-from app.deps import get_db, get_order_or_404, get_session_id, get_settings
+from app.deps import get_db, get_ocr_provider, get_order_or_404, get_session_id, get_settings
+from app.ocr.image import UploadValidationError, validate_and_normalize_upload
+from app.ocr.parser import build_candidates
+from app.ocr.provider import OcrProvider, OcrProviderError
 from app.orders.models import Order
 from app.orders.repository import create_order, set_dates, update_coverage, update_policyholder, update_vehicle_fields
 from app.pricing.provider import available_periods, get_period
@@ -293,9 +297,157 @@ def post_method(
     return _redirect("/documents-soon")
 
 
+def _documents_upload_context(
+    draft: dict, *, ocr_provider: OcrProvider | None, error: str | None = None
+) -> dict:
+    return {
+        "steps": build_draft_steps(draft, 4),
+        "ocr_available": ocr_provider is not None,
+        "error": error,
+        "back_url": "/method",
+    }
+
+
 @router.get("/documents-soon")
-def documents_soon(request: Request):
-    return render(request, "documents_soon.html")
+def get_documents_upload(
+    request: Request,
+    session_id: str = Depends(get_session_id),
+    conn: sqlite3.Connection = Depends(get_db),
+    ocr_provider: OcrProvider | None = Depends(get_ocr_provider),
+):
+    draft = get_draft(conn, session_id)
+    if not _require_draft_keys(draft, ("start_date", "end_date")):
+        return _redirect("/date")
+    return render(request, "documents_soon.html", _documents_upload_context(draft, ocr_provider=ocr_provider))
+
+
+@router.post("/documents-soon")
+def post_documents_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    session_id: str = Depends(get_session_id),
+    conn: sqlite3.Connection = Depends(get_db),
+    ocr_provider: OcrProvider | None = Depends(get_ocr_provider),
+):
+    # A plain (sync) def, not async def, on purpose: every sync route in
+    # this file runs its whole dependency chain (get_db's sqlite3.Connection
+    # included) in ONE worker thread via FastAPI's threadpool. Making this
+    # handler async instead runs it directly on the event loop while
+    # get_db/get_session_id's sync generator still resolves in a worker
+    # thread, and sqlite3.Connection (check_same_thread=True by default)
+    # then raises "objects created in a thread can only be used in that
+    # same thread" the first time this handler touches conn. file.file is
+    # the underlying sync file object, so no await is needed to read it.
+    draft = get_draft(conn, session_id)
+    if not _require_draft_keys(draft, ("start_date", "end_date")):
+        return _redirect("/date")
+
+    if ocr_provider is None:
+        return render(
+            request,
+            "documents_soon.html",
+            _documents_upload_context(
+                draft,
+                ocr_provider=None,
+                error="Распознавание документов временно недоступно. Введите данные вручную.",
+            ),
+            status_code=503,
+        )
+
+    raw_bytes = file.file.read()
+    try:
+        normalized_image = validate_and_normalize_upload(
+            raw_bytes, filename=file.filename, content_type=file.content_type
+        )
+    except UploadValidationError as exc:
+        return render(
+            request,
+            "documents_soon.html",
+            _documents_upload_context(draft, ocr_provider=ocr_provider, error=str(exc)),
+            status_code=422,
+        )
+
+    started_at = time.monotonic()
+    try:
+        ocr_result = ocr_provider.recognize(normalized_image, "image/jpeg")
+    except OcrProviderError as exc:
+        # Log the provider/duration/safe error classification only -- never
+        # str(exc)/exc.classification's underlying message/body, which could
+        # echo back document content a provider included in an error
+        # payload, and never the image itself. See app.ocr.provider.classify_error.
+        log_event(
+            conn,
+            session_id=session_id,
+            order_id=None,
+            event_name="ocr_failed",
+            properties={
+                "provider": "vision",
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "error_type": type(exc).__name__,
+                **exc.classification,
+            },
+        )
+        return render(
+            request,
+            "documents_soon.html",
+            _documents_upload_context(
+                draft,
+                ocr_provider=ocr_provider,
+                error="Не удалось обработать документ. Попробуйте ещё раз или введите данные вручную.",
+            ),
+            status_code=502,
+        )
+
+    duration_ms = int((time.monotonic() - started_at) * 1000)
+
+    if ocr_result.fields_found_count == 0:
+        log_event(
+            conn,
+            session_id=session_id,
+            order_id=None,
+            event_name="ocr_failed",
+            properties={"provider": ocr_result.provider, "duration_ms": duration_ms, "fields_found_count": 0},
+        )
+        return render(
+            request,
+            "documents_soon.html",
+            _documents_upload_context(
+                draft,
+                ocr_provider=ocr_provider,
+                error="Не удалось распознать данные документа. Попробуйте другое фото или введите данные вручную.",
+            ),
+            status_code=422,
+        )
+
+    candidates = build_candidates(conn, ocr_result)
+    log_event(
+        conn,
+        session_id=session_id,
+        order_id=None,
+        event_name="ocr_success" if ocr_result.is_complete_for_checkout else "ocr_partial",
+        properties={"provider": ocr_result.provider, "duration_ms": duration_ms, "fields_found_count": ocr_result.fields_found_count},
+    )
+
+    # Partial recognition is still success (section 18) -- whatever wasn't
+    # found/matched stays None, and the existing /vehicle form (reached via
+    # the redirect below) lets the user fill in or correct the rest. Hint
+    # text is transient review context only, never a stand-in for a real
+    # manufacturer_id/model_id (see app.ocr.models.VehicleDataCandidates).
+    merge_draft(
+        conn,
+        session_id,
+        {
+            "data_entry_method": "documents",
+            "registration_number": candidates.registration_number,
+            "identifier_type": candidates.identifier_type,
+            "identifier": candidates.identifier,
+            "manufacturer_id": candidates.manufacturer_id,
+            "model_id": candidates.model_id,
+            "ocr_manufacturer_hint": candidates.manufacturer_text if not candidates.manufacturer_id else None,
+            "ocr_model_hint": candidates.model_text if not candidates.model_id else None,
+        },
+    )
+    return _redirect("/vehicle")
 
 
 # ---------------------------------------------------------------------------
@@ -363,16 +515,17 @@ def get_vehicle(
 ):
     # Guard on dates (same condition /method itself guards on) rather than
     # data_entry_method == "manual": reaching /vehicle at all — whether via
-    # "Заполнить вручную" on /method or via the "Заполнить вручную" fallback
-    # link on /documents-soon — means manual entry, by definition. Checking
-    # for the literal "manual" value here used to dead-end anyone who had
-    # picked "Загрузить документы" and then used that fallback link, since
-    # their draft still said data_entry_method="documents". "documents" and
-    # "manual" are two ways to fill the same draft, not two different ones.
+    # "Заполнить вручную" on /method, via the OCR success redirect from
+    # /documents-soon, or via a direct/URL visit that skipped /method
+    # entirely — means there's vehicle data to review here, by definition.
+    # Only DEFAULT to "manual" when nothing has been set at all; a
+    # "documents" value from a successful OCR pass must survive the user
+    # simply opening this review screen (this used to force "manual"
+    # unconditionally, silently discarding that the data came from OCR).
     draft = get_draft(conn, session_id)
     if not _require_draft_keys(draft, ("start_date", "end_date")):
         return _redirect("/date")
-    if draft.get("data_entry_method") != "manual":
+    if not draft.get("data_entry_method"):
         draft = merge_draft(conn, session_id, {"data_entry_method": "manual"})
 
     manufacturer_name = None
@@ -431,7 +584,14 @@ def post_vehicle(
             request,
             "vehicle_form.html",
             _vehicle_form_context(
-                values={**form, "manufacturer_id": manufacturer_id, "model_id": model_id},
+                values={
+                    **form,
+                    "manufacturer_id": manufacturer_id,
+                    "model_id": model_id,
+                    "data_entry_method": draft.get("data_entry_method"),
+                    "ocr_manufacturer_hint": draft.get("ocr_manufacturer_hint"),
+                    "ocr_model_hint": draft.get("ocr_model_hint"),
+                },
                 errors=errors,
                 form_action="/vehicle",
                 manufacturer_name=manufacturer_name,
@@ -446,7 +606,11 @@ def post_vehicle(
         conn,
         session_id,
         {
-            "data_entry_method": "manual",
+            # Preserve how this data actually got here ("documents" from a
+            # successful OCR pass, reviewed/corrected here) rather than
+            # stamping "manual" just because this is the confirmation POST —
+            # only default to "manual" if somehow nothing was set yet.
+            "data_entry_method": draft.get("data_entry_method") or "manual",
             "registration_number": clean["registration_number"],
             "identifier_type": clean["identifier_type"],
             "identifier": clean["identifier"],

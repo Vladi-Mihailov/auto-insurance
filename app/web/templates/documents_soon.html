@@ -1,9 +1,40 @@
 {% extends "base.html" %}
-{% block title %}Скоро{% endblock %}
+{% block title %}Загрузка документа{% endblock %}
 {% block content %}
-<section class="step step--centered">
-  <h1 class="step__title">Распознавание документов появится совсем скоро</h1>
-  <p class="step__text">А пока быстрее всего — заполнить данные вручную, это займёт пару минут.</p>
-  <a class="btn btn--primary btn--lg btn--block" href="/vehicle">Заполнить вручную</a>
+<section class="step">
+  <h1 class="step__title">Загрузите документ на автомобиль</h1>
+  <p class="step__text">Сфотографируйте документ целиком. Убедитесь, что текст хорошо читается и нет сильных бликов.</p>
+
+  {% if error %}<p class="form__error">{{ error }}</p>{% endif %}
+
+  {% if ocr_available %}
+  <form method="post" action="/documents-soon" enctype="multipart/form-data" class="form" id="upload-form">
+    <label class="upload-area" for="upload-input" id="upload-area">
+      <input type="file" name="file" id="upload-input" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+      <span class="upload-area__icon" aria-hidden="true">+</span>
+      <span class="upload-area__label">Загрузить фото</span>
+    </label>
+    <span class="step__hint">JPEG, PNG или WEBP, до 10 МБ.</span>
+    <span class="step__hint" id="upload-filename" hidden></span>
+
+    <div class="step-nav">
+      <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
+      <button type="submit" class="btn btn--primary btn--lg" id="recognize-btn" disabled>Распознать</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="step__text">Распознавание документов временно недоступно.</p>
+  <div class="step-nav step-nav--start">
+    <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
+  </div>
+  {% endif %}
+
+  <form method="post" action="/method" class="step-nav step-nav--start">
+    <button type="submit" name="choice" value="manual" class="btn btn--ghost">Ввести данные вручную</button>
+  </form>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/documents_upload.js"></script>
 {% endblock %}

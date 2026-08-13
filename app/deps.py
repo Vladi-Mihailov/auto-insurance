@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Request
 
 from app import tokens
 from app.db import get_connection
+from app.ocr.provider import OcrProvider, OpenAIVisionOcrProvider
 from app.orders.models import Order
 from app.orders.repository import get_order_by_token
 from app.sessions.repository import ensure_session
@@ -56,3 +57,14 @@ def get_order_or_404(resume_token: str, conn: sqlite3.Connection = Depends(get_d
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+
+def get_ocr_provider() -> OcrProvider | None:
+    """None means document recognition is genuinely unavailable right now
+    (no OPENAI_API_KEY configured) -- callers must show that plainly to
+    the user and offer the manual-entry fallback, never silently swap in
+    FakeOcrProvider as a hidden production stub."""
+    settings = get_settings()
+    if not settings.ocr.openai_api_key:
+        return None
+    return OpenAIVisionOcrProvider(api_key=settings.ocr.openai_api_key, model=settings.ocr.vision_model)

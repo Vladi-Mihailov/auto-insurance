@@ -237,9 +237,12 @@ def test_vehicle_step_accepts_other_model_through_the_same_validation_as_any_mod
 
 def test_documents_soon_manual_fallback_continues_the_same_draft():
     """Regression test: choosing "Загрузить документы" then using the
-    "Заполнить вручную" fallback link on /documents-soon used to dead-end
-    back at /method forever, because the draft's data_entry_method stayed
-    "documents" and /vehicle's guard demanded exactly "manual"."""
+    "Ввести данные вручную" fallback on /documents-soon must land on
+    /vehicle with the SAME draft, not dead-end back at /method. The
+    fallback posts choice=manual to the existing /method handler (so it
+    explicitly sets data_entry_method="manual"), not a bare link -- see
+    checkout_routes.get_vehicle's docstring for why a bare link plus a
+    lenient GET-time default isn't enough once documents is a real path."""
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
     fresh_client.post("/date", data={"start_date": "2026-08-15"})
@@ -249,10 +252,17 @@ def test_documents_soon_manual_fallback_continues_the_same_draft():
 
     response = fresh_client.get("/documents-soon")
     assert response.status_code == 200
-    assert 'href="/vehicle"' in response.text  # the fallback link itself
+    assert 'action="/method"' in response.text
+    assert 'value="manual"' in response.text  # the fallback button itself
 
-    # Following that fallback link must land on /vehicle, not bounce back to /method.
-    response = fresh_client.get("/vehicle", follow_redirects=False)
+    # Using that fallback (POST choice=manual to /method) must land on
+    # /vehicle, not bounce back to /method, and must explicitly flip
+    # data_entry_method to "manual".
+    response = fresh_client.post("/method", data={"choice": "manual"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/vehicle"
+
+    response = fresh_client.get("/vehicle")
     assert response.status_code == 200
 
     response = fresh_client.post(

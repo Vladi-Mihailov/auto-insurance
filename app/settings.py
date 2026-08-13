@@ -51,11 +51,21 @@ class ContactSettings(BaseModel):
     vk_url: str | None = None
 
 
+class OcrSettings(BaseModel):
+    # Credential lives ONLY in the environment, never in config.yaml (see
+    # app/ocr/provider.py) -- None means no real provider is configured, in
+    # which case document recognition is reported as unavailable rather
+    # than falling back to a hidden stub in production.
+    openai_api_key: str | None = None
+    vision_model: str = "gpt-5-mini"
+
+
 class Settings(BaseModel):
     app: AppSettings
     pricing: PricingSettings
     payment: PaymentSettings
     contacts: ContactSettings = ContactSettings()
+    ocr: OcrSettings = OcrSettings()
 
 
 def _parse_bool(value: str | None) -> bool:
@@ -109,5 +119,9 @@ def load_settings(project_root: Path) -> Settings:
             max_url=os.getenv("CONTACT_MAX_URL") or None,
             telegram_url=os.getenv("CONTACT_TELEGRAM_URL") or None,
             vk_url=os.getenv("CONTACT_VK_URL") or None,
+        ),
+        ocr=OcrSettings(
+            openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+            vision_model=os.getenv("OCR_VISION_MODEL", "gpt-5-mini"),
         ),
     )
