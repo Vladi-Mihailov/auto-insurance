@@ -47,18 +47,25 @@ pricing:
       - code: "90d"
         label: "90 дней"
         price_rub: 2899
-    # Other categories (bus, truck, trailer, special_vehicle) are synced into
-    # the catalog (so they're selectable/visible on the category screen) but
+    # Trailer RUB tariffs confirmed by business on 2026-08-13. tpl.ge research
+    # (same date) confirmed trailer's checkout flow/vehicle-fields/catalog are
+    # identical to passenger_car/motorcycle -- no category-specific code
+    # needed. 1y intentionally absent, same rule as above.
+    trailer:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 849
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 1249
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 1799
+    # Other categories (bus, truck, special_vehicle) are synced into the
+    # catalog (so they're selectable/visible on the category screen) but
     # deliberately have no pricing.GE.<category> entry at all yet — the
     # category screen shows them as "Скоро" until both business pricing and
     # the rest of their checkout are ready. Do not add periods here for them
-    # without also confirming real RUB prices.
-    #
-    # Trailer RUB tariffs have been confirmed by business (15d=849/30d=1249/
-    # 90d=1799 -- GE-tariff figures are reference only, RUB is the product
-    # source of truth), but are deliberately NOT added here yet: adding a
-    # pricing entry is the only gate this app currently has for "this
-    # category is fully sellable" (see category_period.html), and trailer's
-    # vehicle-fields/catalog/API behavior on tpl.ge has not been researched
-    # yet (unlike motorcycle above). Do not wire these prices in until that
-    # research confirms the rest of the checkout is ready for them.
+    # without also confirming real RUB prices and researching tpl.ge's actual
+    # behavior for that category first (see passenger_car/motorcycle/trailer
+    # above for the research-then-enable pattern).
