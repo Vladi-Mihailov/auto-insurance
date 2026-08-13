@@ -79,11 +79,28 @@ pricing:
       - code: "90d"
         label: "90 дней"
         price_rub: 5449
-    # Other categories (truck, special_vehicle) are synced into the catalog
-    # (so they're selectable/visible on the category screen) but
-    # deliberately have no pricing.GE.<category> entry at all yet — the
-    # category screen shows them as "Скоро" until both business pricing and
-    # the rest of their checkout are ready. Do not add periods here for them
-    # without also confirming real RUB prices and researching tpl.ge's actual
-    # behavior for that category first (see passenger_car/motorcycle/
-    # trailer/bus above for the research-then-enable pattern).
+    # Truck RUB tariffs confirmed by business on 2026-08-13 as INDEPENDENT
+    # fixed tariffs -- NOT a passenger_car*2 formula (that was only an early
+    # reference point, not the final rule) and must not change automatically
+    # if passenger_car pricing changes. tpl.ge research (same date) confirmed
+    # truck's checkout flow/vehicle-fields/catalog are identical to the other
+    # categories above, and that tpl.ge itself performs no mass/axle/body-
+    # type validation anywhere in its checkout. 1y intentionally absent,
+    # same rule as above.
+    truck:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 2699
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 4299
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 7299
+    # special_vehicle is synced into the catalog (so it's selectable/visible
+    # on the category screen) but deliberately has no pricing.GE.<category>
+    # entry at all yet — the category screen shows it as "Скоро" until both
+    # business pricing and the rest of its checkout are ready. Do not add
+    # periods here without also confirming real RUB prices and researching
+    # tpl.ge's actual behavior for it first (see passenger_car/motorcycle/
+    # trailer/bus/truck above for the research-then-enable pattern).
