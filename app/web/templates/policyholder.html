@@ -18,26 +18,49 @@
 
   <form method="post" action="{{ form_action }}" class="form" novalidate>
     <label class="field">
-      <span class="field__label">ФИО</span>
+      <span class="field__label">ФИО (как в загранпаспорте)</span>
       <input type="text" name="full_name" value="{{ full_name or '' }}" placeholder="Иванов Иван Иванович" autocomplete="off">
       {% if errors.full_name %}<span class="field__error">{{ errors.full_name }}</span>{% endif %}
     </label>
 
-    <span class="field__label">Куда отправить готовый полис?</span>
-    <div class="radio-group">
-      {% for type_code, type_label in [("telegram","Telegram"), ("max","MAX"), ("phone","Телефон"), ("other","Другое")] %}
-      <label class="radio-option">
-        <input type="radio" name="contact_type" value="{{ type_code }}" {% if selected_type == type_code %}checked{% endif %} required>
-        <span>{{ type_label }}</span>
-      </label>
-      {% endfor %}
+    <span class="field__label">Контакт</span>
+    <div class="contact-block">
+      <div class="contact-row">
+        <label class="contact-row__label" for="contact_email">Email <span class="contact-row__required">*</span></label>
+        <div class="contact-row__field">
+          <input type="email" id="contact_email" name="contact_email" value="{{ contacts.contact_email or '' }}" placeholder="you@example.com" autocomplete="off">
+          {% if errors.contact_email %}<span class="field__error">{{ errors.contact_email }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="contact-row">
+        <label class="contact-row__label" for="contact_telegram">Telegram</label>
+        <div class="contact-row__field">
+          <input type="text" id="contact_telegram" name="contact_telegram" value="{{ contacts.contact_telegram or '' }}" placeholder="@username" autocomplete="off">
+          {% if errors.contact_telegram %}<span class="field__error">{{ errors.contact_telegram }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="contact-row">
+        <label class="contact-row__label" for="contact_phone">Телефон</label>
+        <div class="contact-row__field">
+          <input type="tel" id="contact_phone" name="contact_phone" value="{{ contacts.contact_phone or '' }}" placeholder="+995 555 12 34 56" autocomplete="off">
+          {% if errors.contact_phone %}<span class="field__error">{{ errors.contact_phone }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="contact-row">
+        <label class="contact-row__label" for="contact_max">MAX</label>
+        <div class="contact-row__field">
+          <input type="text" id="contact_max" name="contact_max" value="{{ contacts.contact_max or '' }}" placeholder="@username" autocomplete="off">
+          {% if errors.contact_max %}<span class="field__error">{{ errors.contact_max }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="contact-row">
+        <label class="contact-row__label" for="contact_other">Другое</label>
+        <div class="contact-row__field">
+          <input type="text" id="contact_other" name="contact_other" value="{{ contacts.contact_other or '' }}" placeholder="Укажите удобный способ связи" autocomplete="off">
+          {% if errors.contact_other %}<span class="field__error">{{ errors.contact_other }}</span>{% endif %}
+        </div>
+      </div>
     </div>
-
-    <label class="field">
-      <span class="field__label">Контакт</span>
-      <input type="text" name="contact_value" value="{{ contact_value or '' }}" placeholder="@username или +995 555 12 34 56" autocomplete="off">
-      {% if errors.contact_value %}<span class="field__error">{{ errors.contact_value }}</span>{% endif %}
-    </label>
 
     <div class="step-nav">
       <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>

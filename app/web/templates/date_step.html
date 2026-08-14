@@ -9,7 +9,7 @@
     <label class="field">
       <span class="field__label">Начало страхования</span>
       <input type="date" name="start_date" id="start_date"
-             value="{{ start_date.isoformat() if start_date else '' }}" required>
+             value="{{ start_date.isoformat() if start_date else '' }}" min="{{ min_date }}" required>
     </label>
 
     <div class="field">

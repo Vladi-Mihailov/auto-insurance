@@ -55,8 +55,11 @@ def _create(conn, catalog_ids, session_id="sess-1"):
         model_id=model_id,
         model_name="730 LD",
         full_name="Ivanov Ivan",
-        contact_type="telegram",
-        contact_value="@ivan",
+        contact_email="ivan@example.com",
+        contact_telegram="@ivan",
+        contact_phone=None,
+        contact_max=None,
+        contact_other=None,
         customer_currency="RUB",
         purchase_currency="GEL",
     )

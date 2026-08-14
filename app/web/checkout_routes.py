@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.analytics.repository import log_event
 from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
-from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode
+from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode, today_in_georgia
 from app.deps import get_db, get_ocr_provider, get_order_or_404, get_session_id, get_settings
 from app.ocr.image import UploadValidationError, validate_and_normalize_upload
 from app.ocr.parser import build_candidates
@@ -26,7 +26,7 @@ from app.orders.models import Order
 from app.orders.repository import create_order, set_dates, update_coverage, update_policyholder, update_vehicle_fields
 from app.pricing.provider import available_periods, get_period
 from app.sessions.repository import clear_draft, get_draft, merge_draft
-from app.validation import validate_contact, validate_full_name, validate_vehicle_details_form
+from app.validation import validate_contacts_form, validate_full_name, validate_vehicle_details_form
 from app.web.step_nav import build_draft_steps, build_order_steps
 from app.web.templating import render
 
@@ -44,6 +44,28 @@ def _require_draft_keys(draft: dict | None, keys: tuple[str, ...]) -> bool:
     if not draft:
         return False
     return all(draft.get(key) is not None for key in keys)
+
+
+_EMPTY_CONTACTS = {
+    "contact_email": "",
+    "contact_telegram": "",
+    "contact_phone": "",
+    "contact_max": "",
+    "contact_other": "",
+}
+
+
+def _parse_and_validate_start_date(raw: str, today: date) -> tuple[date | None, str | None]:
+    """Server-side source of truth for "start date can't be in the past" --
+    the HTML min= attribute (see date_step.html) is a UX nicety only and
+    must never be trusted alone, since a direct POST bypasses it entirely."""
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError:
+        return None, "Некорректная дата"
+    if parsed < today:
+        return None, "Дата начала не может быть раньше сегодняшнего дня"
+    return parsed, None
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +216,7 @@ def get_date_step(
         {
             "start_date": date.fromisoformat(start_value) if start_value else None,
             "end_date": date.fromisoformat(end_value) if end_value else None,
+            "min_date": today_in_georgia().isoformat(),
             "steps": build_draft_steps(draft, 2),
             "form_action": "/date",
             "back_url": "/category-period",
@@ -237,16 +260,17 @@ def post_date_step(
     if not _require_draft_keys(draft, ("vehicle_category_code", "period_code")):
         return _redirect("/category-period")
 
-    try:
-        parsed_start = date.fromisoformat(start_date)
-    except ValueError:
+    today = today_in_georgia()
+    parsed_start, error = _parse_and_validate_start_date(start_date, today)
+    if error:
         return render(
             request,
             "date_step.html",
             {
                 "start_date": None,
                 "end_date": None,
-                "error": "Некорректная дата",
+                "min_date": today.isoformat(),
+                "error": error,
                 "steps": build_draft_steps(draft, 2),
                 "form_action": "/date",
                 "back_url": "/category-period",
@@ -672,8 +696,7 @@ def get_policyholder(
         {
             "errors": {},
             "full_name": "",
-            "selected_type": "telegram",
-            "contact_value": "",
+            "contacts": _EMPTY_CONTACTS,
             "steps": build_draft_steps(draft, 5),
             "form_action": "/policyholder",
             "back_url": "/vehicle",
@@ -686,8 +709,11 @@ def get_policyholder(
 def post_policyholder(
     request: Request,
     full_name: str = Form(""),
-    contact_type: str = Form(...),
-    contact_value: str = Form(""),
+    contact_email: str = Form(""),
+    contact_telegram: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_max: str = Form(""),
+    contact_other: str = Form(""),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -695,23 +721,26 @@ def post_policyholder(
     if not _require_draft_keys(draft, ("manufacturer_id", "model_id")):
         return _redirect("/vehicle")
 
+    submitted_contacts = {
+        "contact_email": contact_email,
+        "contact_telegram": contact_telegram,
+        "contact_phone": contact_phone,
+        "contact_max": contact_max,
+        "contact_other": contact_other,
+    }
     clean_name, name_error = validate_full_name(full_name)
-    clean_contact, contact_error = validate_contact(contact_type, contact_value)
+    clean_contacts, errors = validate_contacts_form(submitted_contacts)
 
-    if name_error or contact_error:
-        errors = {}
+    if name_error or errors:
         if name_error:
             errors["full_name"] = name_error
-        if contact_error:
-            errors["contact_value"] = contact_error
         return render(
             request,
             "policyholder.html",
             {
                 "errors": errors,
                 "full_name": full_name,
-                "selected_type": contact_type,
-                "contact_value": contact_value,
+                "contacts": submitted_contacts,
                 "steps": build_draft_steps(draft, 5),
                 "form_action": "/policyholder",
                 "back_url": "/vehicle",
@@ -748,8 +777,11 @@ def post_policyholder(
         model_id=model.id,
         model_name=model.name,
         full_name=clean_name,
-        contact_type=contact_type,
-        contact_value=clean_contact,
+        contact_email=clean_contacts["contact_email"],
+        contact_telegram=clean_contacts["contact_telegram"],
+        contact_phone=clean_contacts["contact_phone"],
+        contact_max=clean_contacts["contact_max"],
+        contact_other=clean_contacts["contact_other"],
         customer_currency="RUB",
         purchase_currency="GEL",
     )
@@ -951,6 +983,7 @@ def get_edit_date(
         {
             "start_date": order.start_date,
             "end_date": order.end_date,
+            "min_date": today_in_georgia().isoformat(),
             "steps": build_order_steps(order, 2),
             "form_action": f"/o/{order.resume_token}/edit-date",
             "back_url": f"/o/{order.resume_token}/summary",
@@ -968,16 +1001,17 @@ def post_edit_date(
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    try:
-        parsed_start = date.fromisoformat(start_date)
-    except ValueError:
+    today = today_in_georgia()
+    parsed_start, error = _parse_and_validate_start_date(start_date, today)
+    if error:
         return render(
             request,
             "date_step.html",
             {
                 "start_date": None,
                 "end_date": None,
-                "error": "Некорректная дата",
+                "min_date": today.isoformat(),
+                "error": error,
                 "steps": build_order_steps(order, 2),
                 "form_action": f"/o/{resume_token}/edit-date",
                 "back_url": f"/o/{resume_token}/summary",
@@ -1003,8 +1037,7 @@ def get_edit_policyholder(
         {
             "errors": {},
             "full_name": order.full_name,
-            "selected_type": order.contact_type,
-            "contact_value": order.contact_value,
+            "contacts": order.contact_form_values,
             "steps": build_order_steps(order, 5),
             "form_action": f"/o/{order.resume_token}/edit-policyholder",
             "back_url": f"/o/{order.resume_token}/summary",
@@ -1018,28 +1051,34 @@ def post_edit_policyholder(
     request: Request,
     resume_token: str,
     full_name: str = Form(""),
-    contact_type: str = Form(...),
-    contact_value: str = Form(""),
+    contact_email: str = Form(""),
+    contact_telegram: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_max: str = Form(""),
+    contact_other: str = Form(""),
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
+    submitted_contacts = {
+        "contact_email": contact_email,
+        "contact_telegram": contact_telegram,
+        "contact_phone": contact_phone,
+        "contact_max": contact_max,
+        "contact_other": contact_other,
+    }
     clean_name, name_error = validate_full_name(full_name)
-    clean_contact, contact_error = validate_contact(contact_type, contact_value)
+    clean_contacts, errors = validate_contacts_form(submitted_contacts)
 
-    if name_error or contact_error:
-        errors = {}
+    if name_error or errors:
         if name_error:
             errors["full_name"] = name_error
-        if contact_error:
-            errors["contact_value"] = contact_error
         return render(
             request,
             "policyholder.html",
             {
                 "errors": errors,
                 "full_name": full_name,
-                "selected_type": contact_type,
-                "contact_value": contact_value,
+                "contacts": submitted_contacts,
                 "steps": build_order_steps(order, 5),
                 "form_action": f"/o/{resume_token}/edit-policyholder",
                 "back_url": f"/o/{resume_token}/summary",
@@ -1048,5 +1087,14 @@ def post_edit_policyholder(
             status_code=422,
         )
 
-    update_policyholder(conn, order.id, full_name=clean_name, contact_type=contact_type, contact_value=clean_contact)
+    update_policyholder(
+        conn,
+        order.id,
+        full_name=clean_name,
+        contact_email=clean_contacts["contact_email"],
+        contact_telegram=clean_contacts["contact_telegram"],
+        contact_phone=clean_contacts["contact_phone"],
+        contact_max=clean_contacts["contact_max"],
+        contact_other=clean_contacts["contact_other"],
+    )
     return _redirect(f"/o/{resume_token}/summary")

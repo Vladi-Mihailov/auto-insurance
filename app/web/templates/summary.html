@@ -58,10 +58,12 @@
         <span class="summary-card__label">ФИО</span>
         <span>{{ order.full_name }}</span>
       </div>
+      {% for label, value in order.contact_rows %}
       <div class="summary-card__row">
-        <span class="summary-card__label">Контакт</span>
-        <span>{{ order.contact_value }}</span>
+        <span class="summary-card__label">{{ label }}</span>
+        <span>{{ value }}</span>
       </div>
+      {% endfor %}
     </div>
 
     <div class="summary-card__total">

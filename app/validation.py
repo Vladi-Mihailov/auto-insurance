@@ -8,8 +8,8 @@ numbers have no confirmed format at all yet. Validators return
 
 import re
 
-CONTACT_TYPES = ("telegram", "max", "phone", "other")
 IDENTIFIER_TYPES = ("vin", "chassis")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _collapse_spaces(value: str) -> str:
@@ -64,21 +64,76 @@ def validate_full_name(raw: str) -> tuple[str | None, str | None]:
     return value, None
 
 
-def validate_contact(contact_type: str, raw_value: str) -> tuple[str | None, str | None]:
-    if contact_type not in CONTACT_TYPES:
-        return None, "Выберите способ связи"
-
-    value = _collapse_spaces(raw_value)
+def validate_email(raw: str) -> tuple[str | None, str | None]:
+    value = _collapse_spaces(raw)
     if not value:
-        return None, "Укажите контакт"
+        return None, "Email: заполните это поле"
     if len(value) > 120:
-        return None, "Контакт: слишком длинное значение"
-
-    if contact_type == "phone":
-        if not re.match(r"^\+?[0-9\-\s()]{6,20}$", value):
-            return None, "Телефон: укажите номер в формате +995XXXXXXXXX"
-
+        return None, "Email: слишком длинное значение"
+    if not _EMAIL_RE.match(value):
+        return None, "Email: укажите корректный адрес"
     return value, None
+
+
+def validate_optional_contact_text(raw: str, *, field_label: str, max_length: int = 120) -> tuple[str | None, str | None]:
+    """Telegram/MAX/"other" contact fields — optional, so an empty value is
+    success (None, None), not an error. Only checked when actually filled in."""
+    value = _collapse_spaces(raw)
+    if not value:
+        return None, None
+    if len(value) > max_length:
+        return None, f"{field_label}: слишком длинное значение"
+    return value, None
+
+
+def validate_optional_phone(raw: str) -> tuple[str | None, str | None]:
+    value = _collapse_spaces(raw)
+    if not value:
+        return None, None
+    if len(value) > 120:
+        return None, "Телефон: слишком длинное значение"
+    if not re.match(r"^\+?[0-9\-\s()]{6,20}$", value):
+        return None, "Телефон: укажите номер в формате +995XXXXXXXXX"
+    return value, None
+
+
+def validate_contacts_form(form: dict) -> tuple[dict | None, dict[str, str]]:
+    """Email is the only required contact; Telegram/phone/MAX/"other" are
+    independent optional fields that may coexist (never mutually exclusive
+    the way the old single contact_type/contact_value radio-select was).
+    Returns (clean_data, errors); clean_data is None if there are any
+    errors — same shape as validate_vehicle_details_form."""
+    errors: dict[str, str] = {}
+    clean: dict = {}
+
+    email, err = validate_email(form.get("contact_email", ""))
+    if err:
+        errors["contact_email"] = err
+    clean["contact_email"] = email
+
+    telegram, err = validate_optional_contact_text(form.get("contact_telegram", ""), field_label="Telegram")
+    if err:
+        errors["contact_telegram"] = err
+    clean["contact_telegram"] = telegram
+
+    phone, err = validate_optional_phone(form.get("contact_phone", ""))
+    if err:
+        errors["contact_phone"] = err
+    clean["contact_phone"] = phone
+
+    max_contact, err = validate_optional_contact_text(form.get("contact_max", ""), field_label="MAX")
+    if err:
+        errors["contact_max"] = err
+    clean["contact_max"] = max_contact
+
+    other, err = validate_optional_contact_text(form.get("contact_other", ""), field_label="Другое")
+    if err:
+        errors["contact_other"] = err
+    clean["contact_other"] = other
+
+    if errors:
+        return None, errors
+    return clean, {}
 
 
 def validate_vehicle_details_form(form: dict) -> tuple[dict | None, dict[str, str]]:

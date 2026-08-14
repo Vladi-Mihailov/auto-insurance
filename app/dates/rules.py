@@ -46,7 +46,19 @@ resolve.
 
 import calendar
 from abc import ABC, abstractmethod
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+# Georgia has used a single fixed UTC+4 offset year-round since abolishing
+# DST in 2005 -- a plain fixed-offset timezone is enough (and avoids an
+# IANA tzdata dependency zoneinfo would need, which isn't bundled on
+# Windows). This is the one place "today" is decided for start-date
+# validation, so the business's calendar day never drifts from the
+# server's/browser's own timezone.
+GEORGIA_TZ = timezone(timedelta(hours=4), name="Georgia")
+
+
+def today_in_georgia() -> date:
+    return datetime.now(GEORGIA_TZ).date()
 
 
 class UnknownPeriodCode(ValueError):

@@ -10,9 +10,12 @@ class Order:
     country_code: str
     status: str
     session_id: str | None
-    contact_type: str | None
-    contact_value: str | None
     full_name: str | None
+    contact_email: str | None
+    contact_telegram: str | None
+    contact_phone: str | None
+    contact_max: str | None
+    contact_other: str | None
     period_code: str | None
     start_date: date | None
     end_date: date | None
@@ -39,6 +42,13 @@ class Order:
     vin: str | None
     car_number: str | None
 
+    # Legacy single contact_type/contact_value radio-select columns — kept
+    # only so orders created before the multi-field contact migration keep
+    # reading back correctly (see contact_rows below). New orders leave
+    # these NULL; never write to them.
+    contact_type: str | None
+    contact_value: str | None
+
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Order":
         return cls(
@@ -47,9 +57,14 @@ class Order:
             country_code=row["country_code"],
             status=row["status"],
             session_id=row["session_id"],
+            full_name=row["full_name"],
+            contact_email=row["contact_email"],
+            contact_telegram=row["contact_telegram"],
+            contact_phone=row["contact_phone"],
+            contact_max=row["contact_max"],
+            contact_other=row["contact_other"],
             contact_type=row["contact_type"],
             contact_value=row["contact_value"],
-            full_name=row["full_name"],
             period_code=row["period_code"],
             start_date=date.fromisoformat(row["start_date"]) if row["start_date"] else None,
             end_date=date.fromisoformat(row["end_date"]) if row["end_date"] else None,
@@ -91,3 +106,50 @@ class Order:
     @property
     def display_registration_number(self) -> str | None:
         return self.car_number
+
+    @property
+    def contact_rows(self) -> list[tuple[str, str]]:
+        """(label, value) pairs for every populated contact -- multiple can
+        coexist since only email is required. Falls back to the legacy
+        single contact_type/contact_value for orders created before the
+        multi-field contact migration (see Order.contact_type docstring
+        above), which never had the new columns populated at all."""
+        rows = [
+            (label, value)
+            for label, value in (
+                ("Email", self.contact_email),
+                ("Telegram", self.contact_telegram),
+                ("Телефон", self.contact_phone),
+                ("MAX", self.contact_max),
+                ("Другое", self.contact_other),
+            )
+            if value
+        ]
+        if rows:
+            return rows
+        if self.contact_value:
+            legacy_labels = {"telegram": "Telegram", "max": "MAX", "phone": "Телефон", "other": "Другое"}
+            return [(legacy_labels.get(self.contact_type, "Контакт"), self.contact_value)]
+        return []
+
+    @property
+    def contact_form_values(self) -> dict[str, str]:
+        """The 5 editable contact fields, for pre-filling /edit-policyholder.
+        A legacy contact_type/contact_value order (no new columns populated)
+        maps its single value into the matching new field; email is left
+        blank since it never existed as a concept before this migration --
+        the user must supply it once to save further edits, same as any
+        other now-required field on an old record."""
+        values = {
+            "contact_email": self.contact_email or "",
+            "contact_telegram": self.contact_telegram or "",
+            "contact_phone": self.contact_phone or "",
+            "contact_max": self.contact_max or "",
+            "contact_other": self.contact_other or "",
+        }
+        if not any(values.values()) and self.contact_value:
+            legacy_keys = {"telegram": "contact_telegram", "max": "contact_max", "phone": "contact_phone", "other": "contact_other"}
+            key = legacy_keys.get(self.contact_type)
+            if key:
+                values[key] = self.contact_value
+        return values

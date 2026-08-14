@@ -104,6 +104,16 @@ _ORDER_COLUMN_MIGRATIONS = [
     ("identifier_type", "TEXT"),
     ("identifier", "TEXT"),
     ("data_entry_method", "TEXT"),
+    # Multi-field contacts (email required, the rest optional) replacing the
+    # old single contact_type/contact_value radio-select design. Those two
+    # legacy columns are intentionally left in place, unused by new code, so
+    # orders created before this migration keep reading back correctly --
+    # see app/orders/models.py's Order.contact_rows.
+    ("contact_email", "TEXT"),
+    ("contact_telegram", "TEXT"),
+    ("contact_phone", "TEXT"),
+    ("contact_max", "TEXT"),
+    ("contact_other", "TEXT"),
 ]
 
 # NULL means "this manufacturer's models have never been synced" — distinct

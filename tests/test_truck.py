@@ -138,7 +138,7 @@ def test_full_manual_flow_truck_reaches_summary_with_correct_category_and_price(
 
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"},
+        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -232,7 +232,7 @@ def test_truck_documents_flow_uses_the_existing_pipeline_with_no_truck_branching
 
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Petrov Petr", "contact_type": "telegram", "contact_value": "@petr"},
+        data={"full_name": "Petrov Petr", "contact_email": "petr@example.com", "contact_telegram": "@petr"},
         follow_redirects=False,
     )
     assert response.status_code == 303

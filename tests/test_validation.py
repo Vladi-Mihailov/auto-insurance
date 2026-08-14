@@ -1,7 +1,9 @@
 from app.validation import (
-    validate_contact,
+    validate_contacts_form,
+    validate_email,
     validate_full_name,
     validate_identifier,
+    validate_optional_phone,
     validate_registration_number,
     validate_vehicle_details_form,
 )
@@ -94,13 +96,92 @@ def test_validate_vehicle_details_form_rejects_unknown_identifier_type():
     assert "identifier_type" in errors
 
 
-def test_validate_contact_phone_format():
-    value, error = validate_contact("phone", "+995 555 12 34 56")
+def test_validate_email_accepts_valid_address():
+    value, error = validate_email("ivan@example.com")
+    assert error is None
+    assert value == "ivan@example.com"
+
+
+def test_validate_email_rejects_empty():
+    value, error = validate_email("")
+    assert value is None
+    assert error is not None
+
+
+def test_validate_email_rejects_malformed_address():
+    value, error = validate_email("not-an-email")
+    assert value is None
+    assert error is not None
+
+
+def test_validate_optional_phone_accepts_valid_format():
+    value, error = validate_optional_phone("+995 555 12 34 56")
     assert error is None
     assert value == "+995 555 12 34 56"
 
 
-def test_validate_contact_unknown_type():
-    value, error = validate_contact("carrier-pigeon", "x")
+def test_validate_optional_phone_empty_is_success_not_error():
+    """Phone is optional -- unlike email, blank must not be an error."""
+    value, error = validate_optional_phone("")
+    assert value is None
+    assert error is None
+
+
+def test_validate_optional_phone_rejects_malformed_value_when_provided():
+    value, error = validate_optional_phone("not a phone number!!")
     assert value is None
     assert error is not None
+
+
+def test_validate_contacts_form_requires_only_email():
+    clean, errors = validate_contacts_form(
+        {
+            "contact_email": "ivan@example.com",
+            "contact_telegram": "",
+            "contact_phone": "",
+            "contact_max": "",
+            "contact_other": "",
+        }
+    )
+    assert errors == {}
+    assert clean["contact_email"] == "ivan@example.com"
+    assert clean["contact_telegram"] is None
+    assert clean["contact_phone"] is None
+    assert clean["contact_max"] is None
+    assert clean["contact_other"] is None
+
+
+def test_validate_contacts_form_missing_email_is_the_only_error():
+    clean, errors = validate_contacts_form(
+        {
+            "contact_email": "",
+            "contact_telegram": "@ivan",
+            "contact_phone": "",
+            "contact_max": "",
+            "contact_other": "",
+        }
+    )
+    assert clean is None
+    assert list(errors.keys()) == ["contact_email"]
+
+
+def test_validate_contacts_form_multiple_optional_contacts_can_coexist():
+    """Independent fields, not a radio/exclusive choice -- several optional
+    contacts filled in at once must all validate and all be kept."""
+    clean, errors = validate_contacts_form(
+        {
+            "contact_email": "ivan@example.com",
+            "contact_telegram": "@ivan",
+            "contact_phone": "+995 555 12 34 56",
+            "contact_max": "@ivan_max",
+            "contact_other": "WhatsApp +7 900 000 00 00",
+        }
+    )
+    assert errors == {}
+    assert clean == {
+        "contact_email": "ivan@example.com",
+        "contact_telegram": "@ivan",
+        "contact_phone": "+995 555 12 34 56",
+        "contact_max": "@ivan_max",
+        "contact_other": "WhatsApp +7 900 000 00 00",
+    }

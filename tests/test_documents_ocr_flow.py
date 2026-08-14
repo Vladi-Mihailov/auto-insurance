@@ -366,7 +366,7 @@ def test_ocr_flow_to_policyholder_creates_exactly_one_order_and_no_duplicate_on_
     )
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"},
+        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -374,7 +374,7 @@ def test_ocr_flow_to_policyholder_creates_exactly_one_order_and_no_duplicate_on_
     assert _count_orders() == before + 1
 
     # Double-submit (browser back + resubmit) must not create a second order.
-    client_.post("/policyholder", data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"})
+    client_.post("/policyholder", data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"})
     assert _count_orders() == before + 1
 
     conn = get_connection(_settings.app.db_file)

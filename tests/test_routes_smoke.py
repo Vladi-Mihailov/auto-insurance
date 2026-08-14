@@ -298,7 +298,7 @@ def test_double_submit_policyholder_does_not_create_a_duplicate_order():
             "model_id": str(_model_id),
         },
     )
-    policyholder_data = {"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"}
+    policyholder_data = {"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"}
 
     first = fresh_client.post("/policyholder", data=policyholder_data, follow_redirects=False)
     assert first.status_code == 303
@@ -338,7 +338,7 @@ def test_back_to_vehicle_then_forward_again_does_not_duplicate_or_corrupt_draft(
 
     created = fresh_client.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"},
+        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
         follow_redirects=False,
     )
     assert created.status_code == 303
@@ -423,7 +423,7 @@ def test_full_happy_path_reaches_payment_screen():
 
     response = happy_client.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"},
+        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -469,7 +469,7 @@ def test_edit_vehicle_updates_an_existing_order():
     )
     response = edit_client.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"},
+        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
         follow_redirects=False,
     )
     resume_token = response.headers["location"].split("/")[2]
@@ -732,7 +732,7 @@ def _create_full_order(client_) -> str:
     )
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_type": "telegram", "contact_value": "@ivan"},
+        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
         follow_redirects=False,
     )
     return response.headers["location"].split("/")[2]
@@ -843,7 +843,7 @@ def test_post_order_editing_updates_the_same_order_never_creates_a_duplicate():
     # --- edit policyholder ---
     response = client_.post(
         f"/o/{resume_token}/edit-policyholder",
-        data={"full_name": "Petrov Petr", "contact_type": "telegram", "contact_value": "@petr"},
+        data={"full_name": "Petrov Petr", "contact_email": "petr@example.com", "contact_telegram": "@petr"},
         follow_redirects=False,
     )
     assert response.status_code == 303

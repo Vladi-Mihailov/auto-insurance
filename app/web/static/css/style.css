@@ -262,7 +262,11 @@ a.progress__num:hover {
 
 .field input[type="text"],
 .field input[type="date"],
-.field input[type="tel"] {
+.field input[type="tel"],
+.field input[type="email"],
+.contact-row__field input[type="text"],
+.contact-row__field input[type="tel"],
+.contact-row__field input[type="email"] {
   border: 1.5px solid var(--border);
   border-radius: var(--radius-md);
   padding: 14px 16px;
@@ -271,9 +275,11 @@ a.progress__num:hover {
   color: var(--text);
   outline: none;
   transition: border-color 0.15s ease;
+  width: 100%;
 }
 
-.field input:focus {
+.field input:focus,
+.contact-row__field input:focus {
   border-color: var(--accent);
   background: #fff;
 }
@@ -296,6 +302,52 @@ a.progress__num:hover {
   color: var(--danger);
   font-size: 0.9rem;
   margin: 0;
+}
+
+/* ---------- contact block (policyholder) ---------- */
+
+.contact-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.contact-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.contact-row__label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.contact-row__required {
+  color: var(--danger);
+}
+
+.contact-row__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (min-width: 480px) {
+  .contact-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .contact-row__label {
+    flex: 0 0 110px;
+  }
+
+  .contact-row__field {
+    flex: 1;
+  }
 }
 
 .radio-group {
@@ -494,7 +546,19 @@ a.progress__num:hover {
 }
 
 .radio-group--entity {
+  /* Mobile-first single column: at narrow widths (e.g. 375px) two 1fr
+     columns squeeze "Юридическое лицо" + its "СКОРО" badge into ~150px,
+     causing horizontal overflow -- full width avoids that without
+     changing any behavior. Widened back to two columns once there's
+     room (matches .choice-grid--categories' own breakpoint). */
+  grid-template-columns: 1fr;
   margin-bottom: 4px;
+}
+
+@media (min-width: 480px) {
+  .radio-group--entity {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .radio-option--disabled {

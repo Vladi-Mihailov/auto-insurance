@@ -36,8 +36,11 @@ def create_order(
     model_id: int,
     model_name: str,
     full_name: str,
-    contact_type: str,
-    contact_value: str,
+    contact_email: str,
+    contact_telegram: str | None,
+    contact_phone: str | None,
+    contact_max: str | None,
+    contact_other: str | None,
     customer_currency: str,
     purchase_currency: str,
 ) -> Order:
@@ -69,10 +72,10 @@ def create_order(
             vehicle_category_code, period_code, start_date, end_date, price_customer_minor,
             data_entry_method, car_number, identifier_type, identifier,
             manufacturer_id, vehicle_make, model_id, vehicle_model,
-            full_name, contact_type, contact_value,
+            full_name, contact_email, contact_telegram, contact_phone, contact_max, contact_other,
             customer_currency, purchase_currency,
             resume_token, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "",  # public_number filled in below once we have the id
@@ -93,8 +96,11 @@ def create_order(
             model_id,
             model_name,
             full_name,
-            contact_type,
-            contact_value,
+            contact_email,
+            contact_telegram,
+            contact_phone,
+            contact_max,
+            contact_other,
             customer_currency,
             purchase_currency,
             resume_token,
@@ -191,13 +197,30 @@ def set_dates(conn: sqlite3.Connection, order_id: int, *, start_date: date, end_
     conn.commit()
 
 
-def update_policyholder(conn: sqlite3.Connection, order_id: int, *, full_name: str, contact_type: str, contact_value: str) -> None:
-    """Post-order edit of the policyholder's name/contact (see
+def update_policyholder(
+    conn: sqlite3.Connection,
+    order_id: int,
+    *,
+    full_name: str,
+    contact_email: str,
+    contact_telegram: str | None,
+    contact_phone: str | None,
+    contact_max: str | None,
+    contact_other: str | None,
+) -> None:
+    """Post-order edit of the policyholder's name/contacts (see
     /o/{token}/edit-policyholder). Legal-entity policyholders are still not
-    supported -- callers only ever pass the individual fields."""
+    supported -- callers only ever pass the individual fields. Never writes
+    the legacy contact_type/contact_value columns -- those exist only for
+    orders created before the multi-field contact migration (see
+    app.orders.models.Order.contact_rows)."""
     conn.execute(
-        "UPDATE insurance_orders SET full_name = ?, contact_type = ?, contact_value = ?, updated_at = ? WHERE id = ?",
-        (full_name, contact_type, contact_value, _now(), order_id),
+        """
+        UPDATE insurance_orders
+        SET full_name = ?, contact_email = ?, contact_telegram = ?, contact_phone = ?, contact_max = ?, contact_other = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (full_name, contact_email, contact_telegram, contact_phone, contact_max, contact_other, _now(), order_id),
     )
     conn.commit()
 
