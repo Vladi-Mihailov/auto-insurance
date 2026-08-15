@@ -140,6 +140,35 @@ def get_order_by_token(conn: sqlite3.Connection, resume_token: str) -> Order | N
     return Order.from_row(row) if row else None
 
 
+def list_orders_by_status(conn: sqlite3.Connection, status: OrderStatus) -> list[Order]:
+    """Used by /admin/orders — oldest-pending-first, so whichever payment
+    claim has been waiting longest for review is at the top."""
+    rows = conn.execute(
+        "SELECT * FROM insurance_orders WHERE status = ? ORDER BY updated_at ASC", (status.value,)
+    ).fetchall()
+    return [Order.from_row(row) for row in rows]
+
+
+def get_latest_transition_at(
+    conn: sqlite3.Connection, order_id: int, *, from_status: OrderStatus, to_status: OrderStatus
+) -> datetime | None:
+    """Reads insurance_order_status_history — already populated by every
+    set_status() call — rather than a dedicated timestamp column; see the
+    manual-payment research report for why no schema change is needed here.
+    Returns the most recent matching transition (an order can cycle through
+    AWAITING_PAYMENT<->PAYMENT_REVIEW more than once if a payment claim is
+    rejected and the customer resubmits), or None if it never happened."""
+    row = conn.execute(
+        """
+        SELECT created_at FROM insurance_order_status_history
+        WHERE order_id = ? AND from_status = ? AND to_status = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (order_id, from_status.value, to_status.value),
+    ).fetchone()
+    return datetime.fromisoformat(row["created_at"]) if row else None
+
+
 def set_status(conn: sqlite3.Connection, order_id: int, new_status: OrderStatus, *, note: str | None = None) -> None:
     order = get_order_by_id(conn, order_id)
     if order is None:

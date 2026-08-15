@@ -45,12 +45,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  var uploadBtn = document.getElementById("upload-receipt-btn");
-  if (uploadBtn) {
-    uploadBtn.addEventListener("click", function () {
-      document.getElementById("upload-receipt-hint").hidden = false;
-    });
-  }
 });
 
 function formatDate(isoDate) {

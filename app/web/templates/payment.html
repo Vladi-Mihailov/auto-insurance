@@ -2,6 +2,7 @@
 {% block title %}Оплата{% endblock %}
 {% block content %}
 <section class="step">
+  {% if order.status == "awaiting_payment" %}
   <h1 class="step__title">Оплата</h1>
 
   <div class="payment-amount">
@@ -18,16 +19,47 @@
     <button type="button" class="btn btn--ghost btn--sm" id="copy-card-btn" data-copy-target="card-number">Скопировать номер карты</button>
   </div>
 
+  {% if payment.qr_image_url %}
   <div class="payment-qr">
-    <div class="payment-qr__placeholder">QR оплаты<br><span class="payment-qr__hint">появится позже</span></div>
+    <img class="payment-qr__image" src="{{ payment.qr_image_url }}" alt="QR-код для оплаты по СБП">
   </div>
+  {% endif %}
 
-  <p class="step__text">После перевода загрузите чек:</p>
-  <button type="button" class="btn btn--primary btn--lg btn--block" id="upload-receipt-btn">Загрузить чек</button>
-  <p class="step__hint" id="upload-receipt-hint" hidden>Загрузка чека будет подключена на следующем этапе.</p>
+  <form method="post" action="/o/{{ order.resume_token }}/confirm-payment">
+    <button type="submit" class="btn btn--primary btn--lg btn--block">Я оплатил</button>
+  </form>
 
   <div class="step-nav step-nav--start">
     <a href="/o/{{ order.resume_token }}/summary" class="btn btn--ghost btn--lg">Назад</a>
   </div>
+
+  {% elif order.status == "payment_review" %}
+  <h1 class="step__title">Оплата проверяется</h1>
+
+  <div class="payment-amount">
+    <span class="payment-amount__label">Сумма</span>
+    <span class="payment-amount__value">{{ (order.price_customer_minor // 100) | rub }} ₽</span>
+  </div>
+
+  <p class="step__text">Мы получили ваше сообщение об оплате. Проверяем поступление платежа.</p>
+
+  {% elif order.status == "paid" %}
+  <h1 class="step__title">Оплата подтверждена</h1>
+
+  <div class="payment-amount">
+    <span class="payment-amount__label">Оплачено</span>
+    <span class="payment-amount__value">{{ (order.price_customer_minor // 100) | rub }} ₽</span>
+  </div>
+
+  <p class="step__text">Платёж получен. Заказ передан в обработку.</p>
+
+  {% else %}
+  <!-- Any status beyond this MVP's scope (processing/policy_ready/completed/
+       cancelled) -- neutral fallback rather than a possibly-wrong claim
+       about payment state. Not expected to be reached today: no route yet
+       moves an order past "paid". -->
+  <h1 class="step__title">Статус заказа</h1>
+  <p class="step__text">Текущий статус: {{ order.status }}</p>
+  {% endif %}
 </section>
 {% endblock %}

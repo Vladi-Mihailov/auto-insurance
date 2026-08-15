@@ -4,6 +4,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.db import init_db
 from app.deps import PROJECT_ROOT, SESSION_COOKIE_MAX_AGE, SESSION_COOKIE_NAME, get_settings
+from app.web.admin_routes import router as admin_router
 from app.web.checkout_routes import router as checkout_router
 from app.web.routes import router
 
@@ -46,3 +47,4 @@ app.mount(
 )
 app.include_router(router)
 app.include_router(checkout_router)
+app.include_router(admin_router)

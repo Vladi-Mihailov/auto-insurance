@@ -1,10 +1,12 @@
 """Shared FastAPI dependencies: settings, DB connection, anonymous session, order lookup."""
 
+import secrets
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app import tokens
 from app.db import get_connection
@@ -68,3 +70,33 @@ def get_ocr_provider() -> OcrProvider | None:
     if not settings.ocr.openai_api_key:
         return None
     return OpenAIVisionOcrProvider(api_key=settings.ocr.openai_api_key, model=settings.ocr.vision_model)
+
+
+_admin_basic_auth = HTTPBasic()
+
+
+def require_admin(credentials: HTTPBasicCredentials = Depends(_admin_basic_auth)) -> None:
+    """Every /admin/* route depends on this. FAILS CLOSED: if ADMIN_USERNAME/
+    ADMIN_PASSWORD aren't both configured, admin access is refused outright
+    (401) rather than silently becoming public -- this must never be the
+    difference between "not set up yet" and "open to everyone". Credentials
+    are compared with secrets.compare_digest (constant-time) and never
+    appear in any exception message, log, or response body."""
+    settings = get_settings()
+    configured_username = settings.admin.username
+    configured_password = settings.admin.password
+    if not configured_username or not configured_password:
+        raise HTTPException(
+            status_code=401,
+            detail="Admin access is not configured",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    username_ok = secrets.compare_digest(credentials.username, configured_username)
+    password_ok = secrets.compare_digest(credentials.password, configured_password)
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )

@@ -250,7 +250,10 @@ def post_summary(
 
 
 # ---------------------------------------------------------------------------
-# Payment (UI only — no receipt upload / real payment yet)
+# Payment — manual RUB transfer + admin-reviewed confirmation (see
+# app.web.admin_routes for the admin side). No automatic verification: this
+# route only ever records that the customer CLAIMS to have paid, never an
+# amount -- price is always read from the order, never from this request.
 # ---------------------------------------------------------------------------
 
 
@@ -259,4 +262,36 @@ def get_payment(request: Request, order: Order = Depends(get_order_or_404)):
     settings = get_settings()
     # Payment is beyond the 6-step checkout wizard (Транспорт и срок ... Проверка)
     # -- no progress nav here, matching the step list the wizard actually has.
+    # This single page also doubles as the post-payment status page (see
+    # payment.html's branching on order.status) -- _resume_redirect above
+    # already sends any order past DATA_COMPLETED here regardless of status.
     return render(request, "payment.html", {"order": order, "payment": settings.payment})
+
+
+@router.post("/o/{resume_token}/confirm-payment")
+def post_confirm_payment(
+    resume_token: str,
+    order: Order = Depends(get_order_or_404),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Customer clicks "Я оплатил". Carries no amount or other payment data
+    at all -- the only thing this reports is the fact of a claim, which is
+    exactly why the form in payment.html has no fields.
+
+    Idempotent by construction: only transitions AWAITING_PAYMENT ->
+    PAYMENT_REVIEW when the order is actually still AWAITING_PAYMENT. A
+    double-click, a resubmit, or hitting this after an admin already acted
+    (PAYMENT_REVIEW/PAID/anything else) just falls through to the same
+    redirect with no state change and no error -- the state machine
+    (ensure_transition_allowed, via set_status) remains the authoritative
+    enforcement layer; this check exists so an already-completed action
+    never surfaces as a 500 to the customer.
+    """
+    if order.status == OrderStatus.AWAITING_PAYMENT.value:
+        set_status(
+            conn,
+            order.id,
+            OrderStatus.PAYMENT_REVIEW,
+            note="customer submitted payment confirmation",
+        )
+    return RedirectResponse(f"/o/{resume_token}/payment", status_code=303)

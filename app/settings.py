@@ -60,12 +60,23 @@ class OcrSettings(BaseModel):
     vision_model: str = "gpt-5-mini"
 
 
+class AdminSettings(BaseModel):
+    # Credentials live ONLY in the environment, never in config.yaml (same
+    # rule as OcrSettings.openai_api_key above). Either being None means
+    # admin auth is NOT configured -- see app.deps.require_admin, which
+    # must fail closed (401 on every request) rather than silently allowing
+    # public access when these are unset.
+    username: str | None = None
+    password: str | None = None
+
+
 class Settings(BaseModel):
     app: AppSettings
     pricing: PricingSettings
     payment: PaymentSettings
     contacts: ContactSettings = ContactSettings()
     ocr: OcrSettings = OcrSettings()
+    admin: AdminSettings = AdminSettings()
 
 
 def _parse_bool(value: str | None) -> bool:
@@ -123,5 +134,9 @@ def load_settings(project_root: Path) -> Settings:
         ocr=OcrSettings(
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             vision_model=os.getenv("OCR_VISION_MODEL", "gpt-5-mini"),
+        ),
+        admin=AdminSettings(
+            username=os.getenv("ADMIN_USERNAME") or None,
+            password=os.getenv("ADMIN_PASSWORD") or None,
         ),
     )

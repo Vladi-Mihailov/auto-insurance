@@ -761,6 +761,11 @@ a.progress__num:hover {
   flex: 1;
 }
 
+.summary-actions form {
+  flex: 1;
+  display: flex;
+}
+
 /* ---------- shared Back/Next row (every checkout step) ---------- */
 
 .step-nav {
@@ -928,22 +933,18 @@ a.progress__num:hover {
   justify-content: center;
 }
 
-.payment-qr__placeholder {
-  width: 160px;
-  height: 160px;
-  border: 1.5px dashed var(--border);
+.payment-qr__image {
+  /* Fixed real size (not full-width) so it stays legibly scannable rather
+     than shrinking on narrow phones or growing awkwardly large on desktop
+     -- max-width/height guarantee it never overflows a narrow viewport. */
+  width: 220px;
+  height: 220px;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1.5px solid var(--border);
   border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.9rem;
-  background: var(--surface);
-}
-
-.payment-qr__hint {
-  font-size: 0.75rem;
+  background: #fff;
+  object-fit: contain;
 }
 
 /* ---------- small screens (default already mobile-first, this just caps desktop width) ---------- */
