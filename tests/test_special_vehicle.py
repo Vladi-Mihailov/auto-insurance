@@ -32,6 +32,7 @@ from app.ocr.models import OcrResult
 from app.ocr.provider import FakeOcrProvider
 from app.pricing.provider import available_periods
 from app.settings import AppSettings, PaymentSettings, PeriodConfig, PricingSettings, Settings
+from policyholder_helpers import valid_policyholder_data
 
 _settings = get_settings()
 _conn = get_connection(_settings.app.db_file)
@@ -158,7 +159,7 @@ def test_full_manual_flow_special_vehicle_reaches_summary_with_correct_category_
     )
     assert response.status_code == 303
 
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
     client_.post("/method", data={"choice": "manual"})
 
     response = client_.post(
@@ -177,7 +178,7 @@ def test_full_manual_flow_special_vehicle_reaches_summary_with_correct_category_
 
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
+        data=valid_policyholder_data(contact_telegram="@ivan"),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -210,7 +211,7 @@ def test_special_vehicle_vehicle_step_uses_the_existing_global_catalog(real_prod
     path successfully."""
     client_ = TestClient(app)
     client_.post("/category-period", data={"category_code": "special_vehicle", "period_code": "15d"})
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
     client_.post("/method", data={"choice": "manual"})
 
     response = client_.post(
@@ -255,11 +256,11 @@ def test_special_vehicle_documents_flow_uses_the_existing_pipeline_with_no_speci
     )
     client_ = TestClient(app)
     client_.post("/category-period", data={"category_code": "special_vehicle", "period_code": "90d"})
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
     client_.post("/method", data={"choice": "documents"})
 
     response = client_.post(
-        "/documents-soon", files={"file": ("doc.jpg", _make_jpeg_bytes(), "image/jpeg")}, follow_redirects=False
+        "/documents-soon", files=[("files", ("doc.jpg", _make_jpeg_bytes(), "image/jpeg"))], follow_redirects=False
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/vehicle"
@@ -271,7 +272,7 @@ def test_special_vehicle_documents_flow_uses_the_existing_pipeline_with_no_speci
 
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Petrov Petr", "contact_email": "petr@example.com", "contact_telegram": "@petr"},
+        data=valid_policyholder_data(full_name="Petrov Petr", contact_email="petr@example.com", contact_telegram="@petr"),
         follow_redirects=False,
     )
     assert response.status_code == 303

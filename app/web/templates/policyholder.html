@@ -19,8 +19,25 @@
   <form method="post" action="{{ form_action }}" class="form" novalidate>
     <label class="field">
       <span class="field__label">ФИО (как в загранпаспорте)</span>
-      <input type="text" name="full_name" value="{{ full_name or '' }}" placeholder="Иванов Иван Иванович" autocomplete="off">
+      <input type="text" name="full_name" value="{{ full_name or '' }}" placeholder="Ivanov Ivan Ivanovich" autocomplete="off" required>
       {% if errors.full_name %}<span class="field__error">{{ errors.full_name }}</span>{% endif %}
+    </label>
+
+    <label class="field">
+      <span class="field__label">Идентификационный номер</span>
+      <input type="text" name="identification_number" value="{{ identification_number or '' }}" placeholder="Номер паспорта/ID" autocomplete="off" required>
+      {% if errors.identification_number %}<span class="field__error">{{ errors.identification_number }}</span>{% endif %}
+    </label>
+
+    <label class="field">
+      <span class="field__label">Гражданство</span>
+      <select name="citizenship" required>
+        <option value="" {% if not citizenship %}selected{% endif %} disabled hidden>Выберите страну</option>
+        {% for country in countries %}
+        <option value="{{ country }}" {% if citizenship == country %}selected{% endif %}>{{ country }}</option>
+        {% endfor %}
+      </select>
+      {% if errors.citizenship %}<span class="field__error">{{ errors.citizenship }}</span>{% endif %}
     </label>
 
     <span class="field__label">Контакт</span>
@@ -28,7 +45,7 @@
       <div class="contact-row">
         <label class="contact-row__label" for="contact_email">Email <span class="contact-row__required">*</span></label>
         <div class="contact-row__field">
-          <input type="email" id="contact_email" name="contact_email" value="{{ contacts.contact_email or '' }}" placeholder="you@example.com" autocomplete="off">
+          <input type="email" id="contact_email" name="contact_email" value="{{ contacts.contact_email or '' }}" placeholder="you@example.com" autocomplete="off" required>
           {% if errors.contact_email %}<span class="field__error">{{ errors.contact_email }}</span>{% endif %}
         </div>
       </div>
@@ -62,10 +79,117 @@
       </div>
     </div>
 
+    <div class="subsection">
+      <h2 class="subsection__title">Водитель</h2>
+      <div class="field">
+        <span class="field__label">Водитель и страхователь — одно и то же лицо?</span>
+        <div class="segmented" id="driver-toggle">
+          <label class="segmented__option {% if driver.same_as_policyholder %}is-active{% endif %}">
+            <input type="radio" name="driver_same_as_policyholder" value="yes" {% if driver.same_as_policyholder %}checked{% endif %}>
+            <span>Да</span>
+          </label>
+          <label class="segmented__option {% if not driver.same_as_policyholder %}is-active{% endif %}">
+            <input type="radio" name="driver_same_as_policyholder" value="no" {% if not driver.same_as_policyholder %}checked{% endif %}>
+            <span>Нет</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="driver-fields" {% if driver.same_as_policyholder %}hidden{% endif %}>
+        <label class="field">
+          <span class="field__label">Водитель</span>
+          <input type="text" name="driver_full_name" value="{{ driver.full_name }}" placeholder="Ivanov Ivan Ivanovich" autocomplete="off" required>
+          {% if errors.driver_full_name %}<span class="field__error">{{ errors.driver_full_name }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label">Идентификационный номер</span>
+          <input type="text" name="driver_identifier" value="{{ driver.identifier }}" placeholder="Номер паспорта/ID" autocomplete="off" required>
+          {% if errors.driver_identifier %}<span class="field__error">{{ errors.driver_identifier }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label">Гражданство</span>
+          <input type="text" name="driver_citizenship" value="{{ driver.citizenship }}" placeholder="Georgia" autocomplete="off" required>
+          {% if errors.driver_citizenship %}<span class="field__error">{{ errors.driver_citizenship }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label">Номер телефона</span>
+          <input type="tel" name="driver_phone" value="{{ driver.phone }}" placeholder="+995 555 12 34 56" autocomplete="off">
+          {% if errors.driver_phone %}<span class="field__error">{{ errors.driver_phone }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label">Электронная почта</span>
+          <input type="email" name="driver_email" value="{{ driver.email }}" placeholder="you@example.com" autocomplete="off">
+          {% if errors.driver_email %}<span class="field__error">{{ errors.driver_email }}</span>{% endif %}
+        </label>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <h2 class="subsection__title">Владелец</h2>
+      <div class="field">
+        <span class="field__label">Владелец и страхователь — одно и то же лицо?</span>
+        <div class="segmented" id="owner-toggle">
+          <label class="segmented__option {% if owner.same_as_policyholder %}is-active{% endif %}">
+            <input type="radio" name="owner_same_as_policyholder" value="yes" {% if owner.same_as_policyholder %}checked{% endif %}>
+            <span>Да</span>
+          </label>
+          <label class="segmented__option {% if not owner.same_as_policyholder %}is-active{% endif %}">
+            <input type="radio" name="owner_same_as_policyholder" value="no" {% if not owner.same_as_policyholder %}checked{% endif %}>
+            <span>Нет</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="owner-fields" {% if owner.same_as_policyholder %}hidden{% endif %}>
+        <div class="field">
+          <div class="segmented" id="owner-entity-toggle">
+            <label class="segmented__option {% if owner.entity_type != 'legal' %}is-active{% endif %}">
+              <input type="radio" name="owner_entity_type" value="individual" {% if owner.entity_type != 'legal' %}checked{% endif %}>
+              <span>Физическое лицо</span>
+            </label>
+            <label class="segmented__option {% if owner.entity_type == 'legal' %}is-active{% endif %}">
+              <input type="radio" name="owner_entity_type" value="legal" {% if owner.entity_type == 'legal' %}checked{% endif %}>
+              <span>Юридическое лицо</span>
+            </label>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="field__label" id="owner-name-label">{{ "Название организации" if owner.entity_type == "legal" else "Владелец" }}</span>
+          <input type="text" name="owner_full_name" value="{{ owner.full_name }}" placeholder="Ivanov Ivan Ivanovich" autocomplete="off" required>
+          {% if errors.owner_full_name %}<span class="field__error">{{ errors.owner_full_name }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label" id="owner-identifier-label">{{ "Идентификационный код" if owner.entity_type == "legal" else "Идентификационный номер" }}</span>
+          <input type="text" name="owner_identifier" value="{{ owner.identifier }}" placeholder="Номер паспорта/ID" autocomplete="off" required>
+          {% if errors.owner_identifier %}<span class="field__error">{{ errors.owner_identifier }}</span>{% endif %}
+        </label>
+        <label class="field" id="owner-citizenship-field" {% if owner.entity_type == "legal" %}hidden{% endif %}>
+          <span class="field__label">Гражданство</span>
+          <input type="text" name="owner_citizenship" value="{{ owner.citizenship }}" placeholder="Georgia" autocomplete="off" required>
+          {% if errors.owner_citizenship %}<span class="field__error">{{ errors.owner_citizenship }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label">Номер телефона</span>
+          <input type="tel" name="owner_phone" value="{{ owner.phone }}" placeholder="+995 555 12 34 56" autocomplete="off">
+          {% if errors.owner_phone %}<span class="field__error">{{ errors.owner_phone }}</span>{% endif %}
+        </label>
+        <label class="field">
+          <span class="field__label">Электронная почта</span>
+          <input type="email" name="owner_email" value="{{ owner.email }}" placeholder="you@example.com" autocomplete="off">
+          {% if errors.owner_email %}<span class="field__error">{{ errors.owner_email }}</span>{% endif %}
+        </label>
+      </div>
+    </div>
+
     <div class="step-nav">
       <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
       <button type="submit" class="btn btn--primary btn--lg">{{ submit_label }}</button>
     </div>
   </form>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/policyholder.js?v=1"></script>
 {% endblock %}

@@ -8,6 +8,7 @@ from app.catalog.repository import upsert_category, upsert_manufacturer, upsert_
 from app.db import get_connection
 from app.deps import get_settings
 from app.main import app
+from policyholder_helpers import valid_policyholder_data
 
 client = TestClient(app)
 
@@ -134,7 +135,7 @@ def test_api_periods_for_category():
 def test_vehicle_step_rejects_model_from_a_different_manufacturer():
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
 
     response = fresh_client.post(
@@ -154,7 +155,7 @@ def test_vehicle_step_rejects_model_from_a_different_manufacturer():
 def test_vehicle_step_rejects_inactive_manufacturer():
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
 
     response = fresh_client.post(
@@ -174,7 +175,7 @@ def test_vehicle_step_rejects_inactive_manufacturer():
 def test_vehicle_step_rejects_inactive_model():
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
 
     response = fresh_client.post(
@@ -194,7 +195,7 @@ def test_vehicle_step_rejects_inactive_model():
 def test_vehicle_step_rejects_arbitrary_model_id():
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
 
     response = fresh_client.post(
@@ -217,7 +218,7 @@ def test_vehicle_step_accepts_other_model_through_the_same_validation_as_any_mod
     manufacturer-match/active checks as any real model, not a bypass."""
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
 
     response = fresh_client.post(
@@ -245,7 +246,7 @@ def test_documents_soon_manual_fallback_continues_the_same_draft():
     lenient GET-time default isn't enough once documents is a real path."""
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
 
     response = fresh_client.post("/method", data={"choice": "documents"}, follow_redirects=False)
     assert response.headers["location"] == "/documents-soon"
@@ -286,7 +287,7 @@ def test_double_submit_policyholder_does_not_create_a_duplicate_order():
     created a second order from the same data instead of failing safely."""
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
     fresh_client.post(
         "/vehicle",
@@ -298,7 +299,7 @@ def test_double_submit_policyholder_does_not_create_a_duplicate_order():
             "model_id": str(_model_id),
         },
     )
-    policyholder_data = {"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"}
+    policyholder_data = valid_policyholder_data(contact_telegram="@ivan")
 
     first = fresh_client.post("/policyholder", data=policyholder_data, follow_redirects=False)
     assert first.status_code == 303
@@ -314,7 +315,7 @@ def test_double_submit_policyholder_does_not_create_a_duplicate_order():
 def test_back_to_vehicle_then_forward_again_does_not_duplicate_or_corrupt_draft():
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
     fresh_client.post(
         "/vehicle",
@@ -338,7 +339,7 @@ def test_back_to_vehicle_then_forward_again_does_not_duplicate_or_corrupt_draft(
 
     created = fresh_client.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
+        data=valid_policyholder_data(contact_telegram="@ivan"),
         follow_redirects=False,
     )
     assert created.status_code == 303
@@ -352,7 +353,7 @@ def test_back_to_vehicle_then_forward_again_does_not_duplicate_or_corrupt_draft(
 def test_vehicle_step_rejects_invalid_identifier():
     fresh_client = TestClient(app)
     fresh_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    fresh_client.post("/date", data={"start_date": "2026-08-15"})
+    fresh_client.post("/date", data={"start_date": "2031-08-15"})
     fresh_client.post("/method", data={"choice": "manual"})
 
     response = fresh_client.post(
@@ -390,7 +391,7 @@ def test_full_happy_path_reaches_payment_screen():
     response = happy_client.get("/date")
     assert response.status_code == 200
 
-    response = happy_client.post("/date", data={"start_date": "2026-08-15"}, follow_redirects=False)
+    response = happy_client.post("/date", data={"start_date": "2031-08-15"}, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/method"
 
@@ -423,7 +424,7 @@ def test_full_happy_path_reaches_payment_screen():
 
     response = happy_client.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
+        data=valid_policyholder_data(contact_telegram="@ivan"),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -434,7 +435,7 @@ def test_full_happy_path_reaches_payment_screen():
 
     response = happy_client.get(f"/o/{resume_token}/summary")
     assert response.status_code == 200
-    assert "30.08.2026" in response.text  # 15d from 15.08 -> 30.08, per GeorgiaDateRule
+    assert "30.08.2031" in response.text  # 15d from 15.08 -> 30.08, per GeorgiaDateRule
     assert "1 500" in response.text
     assert "BMW" in response.text
     assert "730 LD" in response.text
@@ -455,7 +456,7 @@ def test_full_happy_path_reaches_payment_screen():
 def test_edit_vehicle_updates_an_existing_order():
     edit_client = TestClient(app)
     edit_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    edit_client.post("/date", data={"start_date": "2026-08-15"})
+    edit_client.post("/date", data={"start_date": "2031-08-15"})
     edit_client.post("/method", data={"choice": "manual"})
     edit_client.post(
         "/vehicle",
@@ -469,7 +470,7 @@ def test_edit_vehicle_updates_an_existing_order():
     )
     response = edit_client.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
+        data=valid_policyholder_data(contact_telegram="@ivan"),
         follow_redirects=False,
     )
     resume_token = response.headers["location"].split("/")[2]
@@ -515,7 +516,7 @@ def test_back_then_forward_keeps_earlier_draft_values():
     the dates already chosen."""
     happy_client = TestClient(app)
     happy_client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
-    happy_client.post("/date", data={"start_date": "2026-08-15"})
+    happy_client.post("/date", data={"start_date": "2031-08-15"})
 
     response = happy_client.get("/category-period")
     assert response.status_code == 200
@@ -523,7 +524,7 @@ def test_back_then_forward_keeps_earlier_draft_values():
 
     response = happy_client.get("/date")
     assert response.status_code == 200
-    assert 'value="2026-08-15"' in response.text
+    assert 'value="2031-08-15"' in response.text
 
 
 def test_forward_revisit_of_a_previously_completed_step_shows_saved_values():
@@ -532,7 +533,7 @@ def test_forward_revisit_of_a_previously_completed_step_shows_saved_values():
     them, not a blank form."""
     client_ = TestClient(app)
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
     client_.post("/method", data={"choice": "manual"})
     client_.post(
         "/vehicle",
@@ -561,20 +562,20 @@ def test_changing_period_recomputes_end_date_for_the_new_period():
     90d."""
     client_ = TestClient(app)
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
 
-    response = client_.get("/api/date-preview", params={"start": "2026-08-15"})
-    assert response.json() == {"end_date": "2026-09-14"}  # 30d
+    response = client_.get("/api/date-preview", params={"start": "2031-08-15"})
+    assert response.json() == {"end_date": "2031-09-14"}  # 30d
 
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "90d"})
 
     response = client_.get("/date")
     assert response.status_code == 200
-    assert "13.11.2026" in response.text  # 15.08 + 90d, recomputed for the new period
-    assert "14.09.2026" not in response.text  # stale 30d end_date must be gone
+    assert "13.11.2031" in response.text  # 15.08 + 90d, recomputed for the new period
+    assert "14.09.2031" not in response.text  # stale 30d end_date must be gone
 
-    response = client_.get("/api/date-preview", params={"start": "2026-08-15"})
-    assert response.json() == {"end_date": "2026-11-13"}
+    response = client_.get("/api/date-preview", params={"start": "2031-08-15"})
+    assert response.json() == {"end_date": "2031-11-13"}
 
 
 def test_cannot_url_jump_past_a_required_step_on_a_fresh_session():
@@ -606,7 +607,7 @@ def test_progress_nav_only_links_completed_steps():
     5+6 (future) must not be."""
     client_ = TestClient(app)
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
 
     response = client_.get("/method")
     assert response.status_code == 200
@@ -718,7 +719,7 @@ def _count_orders() -> int:
 
 def _create_full_order(client_) -> str:
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    client_.post("/date", data={"start_date": "2026-08-15"})
+    client_.post("/date", data={"start_date": "2031-08-15"})
     client_.post("/method", data={"choice": "manual"})
     client_.post(
         "/vehicle",
@@ -732,7 +733,7 @@ def _create_full_order(client_) -> str:
     )
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com", "contact_telegram": "@ivan"},
+        data=valid_policyholder_data(contact_telegram="@ivan"),
         follow_redirects=False,
     )
     return response.headers["location"].split("/")[2]
@@ -781,7 +782,7 @@ def test_post_order_editing_updates_the_same_order_never_creates_a_duplicate():
         conn.close()
     order_id = order_before.id
     assert order_before.price_customer_minor == 1500 * 100  # 15d, from test fixture pricing
-    assert order_before.end_date.isoformat() == "2026-08-30"  # 15.08 + 15d
+    assert order_before.end_date.isoformat() == "2031-08-30"  # 15.08 + 15d
 
     # --- edit coverage: 15d -> 30d ---
     response = client_.post(
@@ -803,14 +804,14 @@ def test_post_order_editing_updates_the_same_order_never_creates_a_duplicate():
     assert order_after_coverage.resume_token == resume_token
     assert order_after_coverage.period_code == "30d"
     assert order_after_coverage.price_customer_minor == 2500 * 100  # 30d, from test fixture pricing
-    assert order_after_coverage.end_date.isoformat() == "2026-09-14"  # same 15.08 start + 30d
-    assert order_after_coverage.start_date.isoformat() == "2026-08-15"  # untouched
+    assert order_after_coverage.end_date.isoformat() == "2031-09-14"  # same 15.08 start + 30d
+    assert order_after_coverage.start_date.isoformat() == "2031-08-15"  # untouched
 
     response = client_.get(f"/o/{resume_token}/summary")
     assert "2 500" in response.text
 
     # --- edit date ---
-    response = client_.post(f"/o/{resume_token}/edit-date", data={"start_date": "2026-09-01"}, follow_redirects=False)
+    response = client_.post(f"/o/{resume_token}/edit-date", data={"start_date": "2031-09-01"}, follow_redirects=False)
     assert response.status_code == 303
 
     conn = get_connection(_settings.app.db_file)
@@ -821,8 +822,8 @@ def test_post_order_editing_updates_the_same_order_never_creates_a_duplicate():
     finally:
         conn.close()
     assert order_after_date.id == order_id
-    assert order_after_date.start_date.isoformat() == "2026-09-01"
-    assert order_after_date.end_date.isoformat() == "2026-10-01"  # 30d from the new start
+    assert order_after_date.start_date.isoformat() == "2031-09-01"
+    assert order_after_date.end_date.isoformat() == "2031-10-01"  # 30d from the new start
 
     # --- edit vehicle: change model ---
     response = client_.post(
@@ -843,7 +844,7 @@ def test_post_order_editing_updates_the_same_order_never_creates_a_duplicate():
     # --- edit policyholder ---
     response = client_.post(
         f"/o/{resume_token}/edit-policyholder",
-        data={"full_name": "Petrov Petr", "contact_email": "petr@example.com", "contact_telegram": "@petr"},
+        data=valid_policyholder_data(full_name="Petrov Petr", contact_email="petr@example.com", contact_telegram="@petr"),
         follow_redirects=False,
     )
     assert response.status_code == 303

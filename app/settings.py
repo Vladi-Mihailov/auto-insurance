@@ -37,6 +37,13 @@ class PaymentSettings(BaseModel):
     card_number: str
     card_holder: str
     qr_image_url: str | None = None
+    # Direct link to pay via SBP/transfer (e.g. a bank's own payment link) --
+    # an alternative to scanning the QR from the same device it's displayed
+    # on. Optional and independent of qr_image_url: either, both, or neither
+    # may be configured (see payment.html's rendering and app.web.routes'
+    # get_payment). Never confirms payment by itself -- the customer still
+    # has to come back and click "Я оплатил" (post_confirm_payment).
+    transfer_url: str | None = None
 
 
 class AppSettings(BaseModel):
@@ -125,6 +132,7 @@ def load_settings(project_root: Path) -> Settings:
             card_number=os.getenv("PAYMENT_CARD_NUMBER", "0000 0000 0000 0000"),
             card_holder=os.getenv("PAYMENT_CARD_HOLDER", ""),
             qr_image_url=os.getenv("PAYMENT_QR_IMAGE_URL") or None,
+            transfer_url=os.getenv("PAYMENT_TRANSFER_URL") or None,
         ),
         contacts=ContactSettings(
             max_url=os.getenv("CONTACT_MAX_URL") or None,

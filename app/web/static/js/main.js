@@ -29,22 +29,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  var copyBtn = document.getElementById("copy-card-btn");
-  if (copyBtn) {
-    copyBtn.addEventListener("click", function () {
-      var targetId = copyBtn.getAttribute("data-copy-target");
-      var text = document.getElementById(targetId).textContent.trim();
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(text);
-      }
-      var original = copyBtn.textContent;
-      copyBtn.textContent = "Скопировано";
-      setTimeout(function () {
-        copyBtn.textContent = original;
-      }, 1500);
-    });
-  }
-
 });
 
 function formatDate(isoDate) {

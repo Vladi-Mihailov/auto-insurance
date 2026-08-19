@@ -264,6 +264,7 @@ a.progress__num:hover {
 .field input[type="date"],
 .field input[type="tel"],
 .field input[type="email"],
+.field select,
 .contact-row__field input[type="text"],
 .contact-row__field input[type="tel"],
 .contact-row__field input[type="email"] {
@@ -279,6 +280,7 @@ a.progress__num:hover {
 }
 
 .field input:focus,
+.field select:focus,
 .contact-row__field input:focus {
   border-color: var(--accent);
   background: #fff;
@@ -310,6 +312,43 @@ a.progress__num:hover {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* ---------- driver / owner subsections (policyholder) ---------- */
+
+.subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1.5px solid var(--border);
+}
+
+.subsection__title {
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+#driver-fields,
+#owner-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* [hidden] vs. our own `display: flex` above are equal-or-lower specificity
+   (see .picker__panel[hidden] above for the same fix on the same root
+   cause) -- without this, the server-rendered `hidden` attribute (see
+   policyholder.html/checkout_routes.py's relationship-state context) is
+   silently defeated and the block stays visible even when Driver/Owner =
+   "Да" says it shouldn't be. */
+#driver-fields[hidden],
+#owner-fields[hidden],
+#owner-citizenship-field[hidden] {
+  display: none;
 }
 
 .contact-row {
@@ -873,8 +912,139 @@ a.progress__num:hover {
   color: var(--accent);
 }
 
+.upload-area__icon--svg {
+  padding: 9px;
+  box-sizing: border-box;
+}
+
 .upload-area__label {
   font-weight: 600;
+  text-align: center;
+}
+
+/* ---------- camera + gallery: two upload actions side by side ---------- */
+
+.upload-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (min-width: 480px) {
+  .upload-actions {
+    flex-direction: row;
+  }
+}
+
+.upload-actions .upload-area {
+  flex: 1;
+}
+
+.upload-area--compact {
+  padding: 24px 16px;
+}
+
+.upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  background: var(--surface);
+}
+
+.upload-list__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.upload-list__remove {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* ---------- camera capture modal (getUserMedia live preview) ---------- */
+
+.camera-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+
+.camera-modal[hidden] {
+  display: none;
+}
+
+.camera-modal__video {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  object-fit: cover;
+  background: #000;
+}
+
+.camera-modal__controls {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  background: #000;
+}
+
+.camera-modal__controls .btn {
+  flex: 1;
+}
+
+/* Sub-states inside the modal (loading / live preview / error) are switched
+   via a `data-state` attribute on .camera-modal, not via `hidden` -- this
+   deliberately avoids the [hidden]-vs-author-`display` specificity trap
+   (see #driver-fields/#owner-fields above): plain attribute-selector
+   scoping like this has no competing native UA rule to fight, so there's
+   no equivalent bug to reintroduce here. Default (loading): status text
+   shown, video and error hidden, capture button disabled via its own
+   `disabled` attribute (set in JS). */
+.camera-modal__status--loading,
+.camera-modal__status--error {
+  display: none;
+  color: #fff;
+  text-align: center;
+  padding: 24px 20px 0;
+  margin: 0;
+}
+
+.camera-modal[data-state="loading"] .camera-modal__status--loading {
+  display: block;
+}
+
+.camera-modal[data-state="error"] .camera-modal__status--error {
+  display: block;
+}
+
+.camera-modal:not([data-state="active"]) .camera-modal__video {
+  display: none;
+}
+
+.upload-list__remove:hover {
+  color: var(--text);
 }
 
 /* ---------- payment ---------- */
@@ -895,37 +1065,10 @@ a.progress__num:hover {
   font-weight: 800;
 }
 
-.payment-card {
-  background: linear-gradient(135deg, #2f5bff, #1f2f8f);
-  color: #fff;
-  border-radius: var(--radius-lg);
-  padding: 22px;
+.payment-methods {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.payment-card__bank {
-  font-weight: 600;
-  opacity: 0.85;
-}
-
-.payment-card__number {
-  font-family: "SF Mono", Menlo, Consolas, monospace;
-  font-size: 1.3rem;
-  letter-spacing: 0.05em;
-}
-
-.payment-card__holder {
-  opacity: 0.85;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-}
-
-.payment-card .btn {
-  align-self: flex-start;
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
+  gap: 14px;
 }
 
 .payment-qr {

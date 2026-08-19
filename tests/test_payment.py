@@ -19,10 +19,11 @@ from fastapi.testclient import TestClient
 
 from app.catalog.repository import mark_models_synced, upsert_category, upsert_manufacturer, upsert_model
 from app.db import get_connection
-from app.deps import get_settings
+from app.deps import PROJECT_ROOT, get_settings
 from app.main import app
 from app.orders.repository import get_order_by_token
 from app.orders.state_machine import OrderStatus
+from policyholder_helpers import valid_policyholder_data
 
 _settings = get_settings()
 _conn = get_connection(_settings.app.db_file)
@@ -51,7 +52,7 @@ def _create_order_awaiting_payment(client_, plate="PAY001AA"):
     )
     response = client_.post(
         "/policyholder",
-        data={"full_name": "Ivanov Ivan", "contact_email": "ivan@example.com"},
+        data=valid_policyholder_data(),
         follow_redirects=False,
     )
     resume_token = response.headers["location"].split("/")[2]
@@ -361,6 +362,153 @@ def test_no_broken_qr_image_when_not_configured():
     assert response.status_code == 200
     assert "payment-qr__image" not in response.text
     assert "<img" not in response.text
+
+
+def test_committed_payment_qr_asset_is_served_correctly():
+    """payment-qr.png (app/web/static/img/payment-qr.png) is a real,
+    intentionally committed production asset -- the user's actual public
+    payment QR, not a secret. This only checks it exists and is served
+    correctly; it never decodes/inspects the QR's payload."""
+    qr_path = PROJECT_ROOT / "app" / "web" / "static" / "img" / "payment-qr.png"
+    assert qr_path.is_file()
+
+    client_ = TestClient(app)
+    response = client_.get("/static/img/payment-qr.png")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert len(response.content) > 0
+
+
+# --------------------------- 21-25: direct transfer link ------------------------
+
+
+def test_transfer_link_button_renders_when_configured(monkeypatch):
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY012LL")
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert 'href="https://example.test/pay/fake-local-placeholder"' in response.text
+        assert "Перейти к оплате" in response.text
+        # external link -- safe target/rel, and never inserted as raw/unescaped HTML
+        assert 'target="_blank"' in response.text
+        assert 'rel="noopener noreferrer"' in response.text
+    finally:
+        get_settings.cache_clear()
+
+
+def test_transfer_link_button_absent_when_not_configured():
+    """Default test environment has no PAYMENT_TRANSFER_URL set (see
+    conftest.py) -- no button, no dangling/empty href."""
+    client_ = TestClient(app)
+    resume_token = _create_order_awaiting_payment(client_, plate="PAY013MM")
+    response = client_.get(f"/o/{resume_token}/payment")
+    assert response.status_code == 200
+    assert "Перейти к оплате" not in response.text
+
+
+def test_qr_and_transfer_link_both_render_when_both_configured(monkeypatch):
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY014NN")
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert '<img class="payment-qr__image" src="/static/img/payment-qr-test.png"' in response.text
+        assert "Перейти к оплате" in response.text
+    finally:
+        get_settings.cache_clear()
+
+
+def test_awaiting_payment_shows_payment_controls(monkeypatch):
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY015OO")
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert "payment-qr__image" in response.text
+        assert "Перейти к оплате" in response.text
+        assert "Я оплатил" in response.text
+        assert "card-number" not in response.text  # card block removed from UI
+    finally:
+        get_settings.cache_clear()
+
+
+def test_awaiting_payment_never_renders_the_card_block(monkeypatch):
+    """The card block (bank name/card number/holder/copy button) is fully
+    removed from the UI -- QR + transfer link are the only payment
+    methods shown now (see the OCR/checkout task report's PAYMENT
+    section). PaymentSettings.bank_name/card_number/card_holder
+    themselves are untouched in settings/config -- only the template
+    markup that used to render them is gone."""
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY018RR")
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert "payment-card" not in response.text
+        assert "Скопировать номер карты" not in response.text
+        assert _settings.payment.card_number not in response.text
+        assert _settings.payment.card_holder not in response.text
+    finally:
+        get_settings.cache_clear()
+
+
+def test_payment_review_hides_qr_link_and_card(monkeypatch):
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY016PP")
+        client_.post(f"/o/{resume_token}/confirm-payment")
+
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert "Оплата проверяется" in response.text
+        assert "payment-qr__image" not in response.text
+        assert "Перейти к оплате" not in response.text
+        assert "card-number" not in response.text
+    finally:
+        get_settings.cache_clear()
+
+
+def test_paid_hides_qr_link_and_card(monkeypatch):
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY017QQ")
+        client_.post(f"/o/{resume_token}/confirm-payment")
+
+        conn = get_connection(_settings.app.db_file)
+        try:
+            from app.orders.repository import set_status
+
+            order = get_order_by_token(conn, resume_token)
+            set_status(conn, order.id, OrderStatus.PAID, note="admin confirmed payment")
+        finally:
+            conn.close()
+
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert "Оплата подтверждена" in response.text
+        assert "payment-qr__image" not in response.text
+        assert "Перейти к оплате" not in response.text
+        assert "card-number" not in response.text
+    finally:
+        get_settings.cache_clear()
 
 
 # --------------------------- 20: legacy orders ----------------------------------

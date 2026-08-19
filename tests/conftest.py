@@ -18,4 +18,10 @@ os.environ.setdefault("APP_SECRET_KEY", "test-secret")
 os.environ.setdefault("PAYMENT_BANK_NAME", "Test Bank")
 os.environ.setdefault("PAYMENT_CARD_NUMBER", "0000 0000 0000 0000")
 os.environ.setdefault("PAYMENT_CARD_HOLDER", "TEST HOLDER")
+# Explicitly blank, not just left unset -- otherwise a real local .env that
+# configures these (see PAYMENT_QR_IMAGE_URL/PAYMENT_TRANSFER_URL in
+# app.settings) would leak into "not configured" test scenarios, same
+# reasoning as the three PAYMENT_* defaults above.
+os.environ.setdefault("PAYMENT_QR_IMAGE_URL", "")
+os.environ.setdefault("PAYMENT_TRANSFER_URL", "")
 os.environ.setdefault("INSURANCE_CONFIG_FILE", "tests/fixtures/test_config.yaml")

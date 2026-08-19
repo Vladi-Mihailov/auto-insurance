@@ -9,13 +9,37 @@
 
   {% if ocr_available %}
   <form method="post" action="/documents-soon" enctype="multipart/form-data" class="form" id="upload-form">
-    <label class="upload-area" for="upload-input" id="upload-area">
-      <input type="file" name="file" id="upload-input" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
-      <span class="upload-area__icon" aria-hidden="true">+</span>
-      <span class="upload-area__label">Загрузить фото</span>
-    </label>
-    <span class="step__hint">JPEG, PNG или WEBP, до 10 МБ.</span>
-    <span class="step__hint" id="upload-filename" hidden></span>
+    <div class="upload-actions">
+      <button type="button" class="upload-area upload-area--compact" id="camera-area">
+        <svg class="upload-area__icon upload-area__icon--svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/>
+          <circle cx="12" cy="14" r="3.5"/>
+        </svg>
+        <span class="upload-area__label">Сфотографировать документ</span>
+      </button>
+
+      <label class="upload-area upload-area--compact" for="upload-input" id="upload-area">
+        <input type="file" name="files" id="upload-input" accept="image/jpeg,image/png,image/webp" multiple data-max-files="{{ max_files }}" hidden>
+        <span class="upload-area__icon" aria-hidden="true">+</span>
+        <span class="upload-area__label">Выбрать фото</span>
+      </label>
+    </div>
+    <span class="step__hint">JPEG, PNG или WEBP, до 10 МБ на файл, до {{ max_files }} файлов.</span>
+    <span class="step__hint" id="upload-count" hidden></span>
+    <div class="upload-list" id="upload-list" hidden></div>
+
+    <div class="camera-modal" id="camera-modal" hidden data-state="loading">
+      <p class="camera-modal__status camera-modal__status--loading" id="camera-status-loading">Открываем камеру…</p>
+      <p class="camera-modal__status camera-modal__status--error" id="camera-status-error">
+        Не удалось открыть камеру.<br>Вы можете выбрать готовое фото.
+      </p>
+      <video class="camera-modal__video" id="camera-video" autoplay playsinline muted></video>
+      <div class="camera-modal__controls">
+        <button type="button" class="btn btn--ghost btn--lg" id="camera-cancel">Отмена</button>
+        <button type="button" class="btn btn--primary btn--lg" id="camera-capture" disabled>Сфотографировать</button>
+      </div>
+    </div>
+    <canvas id="camera-canvas" hidden></canvas>
 
     <div class="step-nav">
       <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
@@ -36,5 +60,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/documents_upload.js"></script>
+<script src="/static/js/documents_upload.js?v=3"></script>
 {% endblock %}

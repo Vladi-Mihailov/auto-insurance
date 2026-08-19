@@ -11,6 +11,8 @@ class Order:
     status: str
     session_id: str | None
     full_name: str | None
+    identification_number: str | None
+    citizenship: str | None
     contact_email: str | None
     contact_telegram: str | None
     contact_phone: str | None
@@ -49,6 +51,27 @@ class Order:
     contact_type: str | None
     contact_value: str | None
 
+    # Driver/owner ("Водитель"/"Владелец" — tpl.ge parity, see /policyholder
+    # and app.validation.validate_driver_form/validate_owner_form).
+    # *_same_as_policyholder is never None (DB column defaults to 1/true --
+    # see app.db._ORDER_COLUMN_MIGRATIONS): a pre-existing order that never
+    # had this concept at all reads back as "same as policyholder", the
+    # ordinary case, not a broken/unknown state. The rest stay None for such
+    # an order, same as any other field never collected from it.
+    driver_same_as_policyholder: bool
+    driver_full_name: str | None
+    driver_identifier: str | None
+    driver_citizenship: str | None
+    driver_phone: str | None
+    driver_email: str | None
+    owner_same_as_policyholder: bool
+    owner_entity_type: str | None  # "individual" | "legal" | None (None means same_as_policyholder)
+    owner_full_name: str | None  # individual's name, or the company name for a legal entity
+    owner_identifier: str | None  # individual's ID number, or the company's identification code
+    owner_citizenship: str | None  # individual only; always None for a legal entity
+    owner_phone: str | None
+    owner_email: str | None
+
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Order":
         return cls(
@@ -58,6 +81,8 @@ class Order:
             status=row["status"],
             session_id=row["session_id"],
             full_name=row["full_name"],
+            identification_number=row["identification_number"],
+            citizenship=row["citizenship"],
             contact_email=row["contact_email"],
             contact_telegram=row["contact_telegram"],
             contact_phone=row["contact_phone"],
@@ -84,6 +109,19 @@ class Order:
             vehicle_model=row["vehicle_model"],
             vin=row["vin"],
             car_number=row["car_number"],
+            driver_same_as_policyholder=bool(row["driver_same_as_policyholder"]),
+            driver_full_name=row["driver_full_name"],
+            driver_identifier=row["driver_identifier"],
+            driver_citizenship=row["driver_citizenship"],
+            driver_phone=row["driver_phone"],
+            driver_email=row["driver_email"],
+            owner_same_as_policyholder=bool(row["owner_same_as_policyholder"]),
+            owner_entity_type=row["owner_entity_type"],
+            owner_full_name=row["owner_full_name"],
+            owner_identifier=row["owner_identifier"],
+            owner_citizenship=row["owner_citizenship"],
+            owner_phone=row["owner_phone"],
+            owner_email=row["owner_email"],
         )
 
     @property

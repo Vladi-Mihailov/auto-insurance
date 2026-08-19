@@ -43,6 +43,21 @@ def create_order(
     contact_other: str | None,
     customer_currency: str,
     purchase_currency: str,
+    identification_number: str | None = None,
+    citizenship: str | None = None,
+    driver_same_as_policyholder: bool = True,
+    driver_full_name: str | None = None,
+    driver_identifier: str | None = None,
+    driver_citizenship: str | None = None,
+    driver_phone: str | None = None,
+    driver_email: str | None = None,
+    owner_same_as_policyholder: bool = True,
+    owner_entity_type: str | None = None,
+    owner_full_name: str | None = None,
+    owner_identifier: str | None = None,
+    owner_citizenship: str | None = None,
+    owner_phone: str | None = None,
+    owner_email: str | None = None,
 ) -> Order:
     """Creates an order already holding the full pre-order draft: category,
     period, dates, price, vehicle catalog data and the policyholder's
@@ -72,10 +87,12 @@ def create_order(
             vehicle_category_code, period_code, start_date, end_date, price_customer_minor,
             data_entry_method, car_number, identifier_type, identifier,
             manufacturer_id, vehicle_make, model_id, vehicle_model,
-            full_name, contact_email, contact_telegram, contact_phone, contact_max, contact_other,
+            full_name, identification_number, citizenship, contact_email, contact_telegram, contact_phone, contact_max, contact_other,
+            driver_same_as_policyholder, driver_full_name, driver_identifier, driver_citizenship, driver_phone, driver_email,
+            owner_same_as_policyholder, owner_entity_type, owner_full_name, owner_identifier, owner_citizenship, owner_phone, owner_email,
             customer_currency, purchase_currency,
             resume_token, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "",  # public_number filled in below once we have the id
@@ -96,11 +113,26 @@ def create_order(
             model_id,
             model_name,
             full_name,
+            identification_number,
+            citizenship,
             contact_email,
             contact_telegram,
             contact_phone,
             contact_max,
             contact_other,
+            int(driver_same_as_policyholder),
+            driver_full_name,
+            driver_identifier,
+            driver_citizenship,
+            driver_phone,
+            driver_email,
+            int(owner_same_as_policyholder),
+            owner_entity_type,
+            owner_full_name,
+            owner_identifier,
+            owner_citizenship,
+            owner_phone,
+            owner_email,
             customer_currency,
             purchase_currency,
             resume_token,
@@ -236,20 +268,63 @@ def update_policyholder(
     contact_phone: str | None,
     contact_max: str | None,
     contact_other: str | None,
+    identification_number: str | None = None,
+    citizenship: str | None = None,
+    driver_same_as_policyholder: bool = True,
+    driver_full_name: str | None = None,
+    driver_identifier: str | None = None,
+    driver_citizenship: str | None = None,
+    driver_phone: str | None = None,
+    driver_email: str | None = None,
+    owner_same_as_policyholder: bool = True,
+    owner_entity_type: str | None = None,
+    owner_full_name: str | None = None,
+    owner_identifier: str | None = None,
+    owner_citizenship: str | None = None,
+    owner_phone: str | None = None,
+    owner_email: str | None = None,
 ) -> None:
-    """Post-order edit of the policyholder's name/contacts (see
-    /o/{token}/edit-policyholder). Legal-entity policyholders are still not
-    supported -- callers only ever pass the individual fields. Never writes
-    the legacy contact_type/contact_value columns -- those exist only for
-    orders created before the multi-field contact migration (see
-    app.orders.models.Order.contact_rows)."""
+    """Post-order edit of the policyholder's name/identity/contacts plus
+    driver/owner (see /o/{token}/edit-policyholder). Legal-entity
+    policyholders are still not supported -- callers only ever pass the
+    individual fields for the policyholder itself (owner_entity_type is a
+    separate, owner-only concept). Never writes the legacy contact_type/
+    contact_value columns -- those exist only for orders created before the
+    multi-field contact migration (see app.orders.models.Order.contact_rows)."""
     conn.execute(
         """
         UPDATE insurance_orders
-        SET full_name = ?, contact_email = ?, contact_telegram = ?, contact_phone = ?, contact_max = ?, contact_other = ?, updated_at = ?
+        SET full_name = ?, identification_number = ?, citizenship = ?, contact_email = ?, contact_telegram = ?, contact_phone = ?, contact_max = ?, contact_other = ?,
+            driver_same_as_policyholder = ?, driver_full_name = ?, driver_identifier = ?, driver_citizenship = ?, driver_phone = ?, driver_email = ?,
+            owner_same_as_policyholder = ?, owner_entity_type = ?, owner_full_name = ?, owner_identifier = ?, owner_citizenship = ?, owner_phone = ?, owner_email = ?,
+            updated_at = ?
         WHERE id = ?
         """,
-        (full_name, contact_email, contact_telegram, contact_phone, contact_max, contact_other, _now(), order_id),
+        (
+            full_name,
+            identification_number,
+            citizenship,
+            contact_email,
+            contact_telegram,
+            contact_phone,
+            contact_max,
+            contact_other,
+            int(driver_same_as_policyholder),
+            driver_full_name,
+            driver_identifier,
+            driver_citizenship,
+            driver_phone,
+            driver_email,
+            int(owner_same_as_policyholder),
+            owner_entity_type,
+            owner_full_name,
+            owner_identifier,
+            owner_citizenship,
+            owner_phone,
+            owner_email,
+            _now(),
+            order_id,
+        ),
     )
     conn.commit()
 

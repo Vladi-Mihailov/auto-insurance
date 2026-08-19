@@ -2,7 +2,7 @@
 parser. Keeping these provider-agnostic is what makes the provider
 swappable later (Google/Azure/local Tesseract) without touching
 checkout_routes.py or the parser: whatever a provider is internally, it
-must produce an OcrResult with exactly these five nullable text fields.
+must produce an OcrResult with exactly these ten nullable text fields.
 """
 
 from dataclasses import dataclass
@@ -10,16 +10,44 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class OcrResult:
-    """The narrow structured extraction result for ONE uploaded vehicle
-    document. Every field is the provider's best-effort raw text reading,
-    not yet normalized and not yet matched against our catalog — that's
-    the parser's job (see app.ocr.parser). None means "not found", never
-    a guess.
+    """The narrow structured extraction result for one insurance case,
+    from all of its uploaded document photos taken together in a single
+    provider call (see app.ocr.provider.OcrProvider.recognize -- never one
+    call per photo). Every field is the provider's best-effort raw text
+    reading, not yet normalized and not yet matched against our catalog —
+    that's the parser's job (see app.ocr.parser). None means "not found",
+    never a guess.
 
-    Deliberately excludes anything about the document's owner (full name,
-    address, passport, etc.) -- the provider is only ever asked for these
-    five vehicle fields (see OpenAIVisionOcrProvider's prompt) and MUST NOT be
-    extended to carry personal fields.
+    policyholder_full_name/driver_full_name/owner_full_name/passport_number/
+    citizenship are the ONLY personal-data fields ever asked of the
+    provider (see OpenAIVisionOcrProvider's prompt for the exact per-field
+    source rule). The driver/owner "Идентификационный номер" fields on
+    /policyholder are always typed by hand, never OCR-derived -- there is
+    no reliable way to know a driver's/owner's own ID number belongs to
+    them specifically rather than to the policyholder (see
+    app.web.checkout_routes.get_policyholder). Each field below has its
+    own single allowed source document and MUST NOT be extended/repurposed:
+    - policyholder_full_name: the vehicle owner named on the tech passport/
+      registration certificate ONLY. Never the passport/ID/driver's
+      license/power-of-attorney holder's name.
+    - driver_full_name: the passport/ID holder's name, falling back to the
+      driver's license only if no passport/ID photo is present. Never the
+      tech passport's owner name.
+    - owner_full_name: the represented owner/principal named in a power of
+      attorney ONLY, and only when confidently identifiable (never the
+      attorney-in-fact/representative acting under it). Never the tech
+      passport's owner name -- that would silently collapse two distinct
+      business roles (see app.ocr.provider's module docstring).
+    - passport_number: the policyholder's own passport/ID number ONLY.
+      Never a driver's license number (a different, incompatible ID),
+      never the tech passport's VIN/chassis/registration number, never
+      anything from a power of attorney.
+    - citizenship: read from that SAME passport/ID document passport_number
+      came from -- never inferred from a name, document language, phone
+      number, or any other document. Normalized to an English country
+      name (see app.countries); may fail to safely match any entry in our
+      fixed country list even when non-None, in which case
+      app.web.checkout_routes never auto-selects anything.
     """
 
     provider: str
@@ -28,12 +56,28 @@ class OcrResult:
     chassis_number: str | None
     manufacturer: str | None
     model: str | None
+    policyholder_full_name: str | None = None
+    driver_full_name: str | None = None
+    owner_full_name: str | None = None
+    passport_number: str | None = None
+    citizenship: str | None = None
 
     @property
     def fields_found_count(self) -> int:
         return sum(
             1
-            for value in (self.registration_number, self.vin, self.chassis_number, self.manufacturer, self.model)
+            for value in (
+                self.registration_number,
+                self.vin,
+                self.chassis_number,
+                self.manufacturer,
+                self.model,
+                self.policyholder_full_name,
+                self.driver_full_name,
+                self.owner_full_name,
+                self.passport_number,
+                self.citizenship,
+            )
             if value
         )
 

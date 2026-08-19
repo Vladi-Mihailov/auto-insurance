@@ -17,16 +17,25 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.analytics.repository import log_event
 from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
+from app.countries import COUNTRIES, match_citizenship_text
 from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode, today_in_georgia
 from app.deps import get_db, get_ocr_provider, get_order_or_404, get_session_id, get_settings
-from app.ocr.image import UploadValidationError, validate_and_normalize_upload
+from app.ocr.image import MAX_FILES_PER_RECOGNITION, UploadValidationError, validate_and_normalize_upload
 from app.ocr.parser import build_candidates
 from app.ocr.provider import OcrProvider, OcrProviderError
 from app.orders.models import Order
 from app.orders.repository import create_order, set_dates, update_coverage, update_policyholder, update_vehicle_fields
 from app.pricing.provider import available_periods, get_period
 from app.sessions.repository import clear_draft, get_draft, merge_draft
-from app.validation import validate_contacts_form, validate_full_name, validate_vehicle_details_form
+from app.validation import (
+    validate_citizenship,
+    validate_contacts_form,
+    validate_driver_form,
+    validate_full_name,
+    validate_identification_number,
+    validate_owner_form,
+    validate_vehicle_details_form,
+)
 from app.web.step_nav import build_draft_steps, build_order_steps
 from app.web.templating import render
 
@@ -201,21 +210,21 @@ def get_date_step(
         return _redirect("/category-period")
 
     start_value = draft.get("start_date")
-    # Recompute end_date from the CURRENT period rather than trusting the
-    # stored value for display — belt-and-suspenders alongside the
-    # invalidation in post_category_period above, in case a draft was ever
-    # written by older code that didn't recompute it.
-    end_value = (
-        DATE_RULE.compute_end_date(date.fromisoformat(start_value), draft["period_code"]).isoformat()
-        if start_value
-        else None
-    )
+    # A fresh checkout (draft has no start_date yet) defaults the FIELD
+    # DISPLAY to today in Georgia -- never UTC/the browser's own timezone,
+    # and never written into the draft here; it only becomes the chosen
+    # value once the user actually submits the form. Once a start_date
+    # exists in the draft (the user already chose one, even if it was
+    # today), it's shown as-is on every later visit -- this default never
+    # overwrites a real choice on back/forward navigation.
+    effective_start = date.fromisoformat(start_value) if start_value else today_in_georgia()
+    end_value = DATE_RULE.compute_end_date(effective_start, draft["period_code"])
     return render(
         request,
         "date_step.html",
         {
-            "start_date": date.fromisoformat(start_value) if start_value else None,
-            "end_date": date.fromisoformat(end_value) if end_value else None,
+            "start_date": effective_start,
+            "end_date": end_value,
             "min_date": today_in_georgia().isoformat(),
             "steps": build_draft_steps(draft, 2),
             "form_action": "/date",
@@ -329,6 +338,7 @@ def _documents_upload_context(
         "ocr_available": ocr_provider is not None,
         "error": error,
         "back_url": "/method",
+        "max_files": MAX_FILES_PER_RECOGNITION,
     }
 
 
@@ -348,7 +358,7 @@ def get_documents_upload(
 @router.post("/documents-soon")
 def post_documents_upload(
     request: Request,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
     ocr_provider: OcrProvider | None = Depends(get_ocr_provider),
@@ -378,22 +388,60 @@ def post_documents_upload(
             status_code=503,
         )
 
-    raw_bytes = file.file.read()
-    try:
-        normalized_image = validate_and_normalize_upload(
-            raw_bytes, filename=file.filename, content_type=file.content_type
-        )
-    except UploadValidationError as exc:
+    # An empty <input multiple> that's still submitted arrives as a single
+    # UploadFile with an empty filename, not an empty list -- guard both.
+    uploaded = [f for f in files if f.filename]
+    if not uploaded:
         return render(
             request,
             "documents_soon.html",
-            _documents_upload_context(draft, ocr_provider=ocr_provider, error=str(exc)),
+            _documents_upload_context(draft, ocr_provider=ocr_provider, error="Загрузите хотя бы одно фото документа."),
+            status_code=422,
+        )
+    if len(uploaded) > MAX_FILES_PER_RECOGNITION:
+        return render(
+            request,
+            "documents_soon.html",
+            _documents_upload_context(
+                draft,
+                ocr_provider=ocr_provider,
+                error=f"Слишком много файлов. Максимум {MAX_FILES_PER_RECOGNITION} за один раз.",
+            ),
             status_code=422,
         )
 
+    # Validate every photo BEFORE calling the OCR provider on any of them --
+    # same all-or-nothing rule the single-file flow already followed (see
+    # test_unsupported_file_rejected_before_any_ocr_call/test_oversized_file_
+    # rejected_before_any_ocr_call): one bad photo in the batch means none of
+    # them are sent anywhere, never a silent partial submit.
+    normalized_images: list[bytes] = []
+    for index, upload in enumerate(uploaded, start=1):
+        raw_bytes = upload.file.read()
+        try:
+            normalized_images.append(
+                validate_and_normalize_upload(raw_bytes, filename=upload.filename, content_type=upload.content_type)
+            )
+        except UploadValidationError as exc:
+            message = str(exc) if len(uploaded) == 1 else f"Файл {index}: {exc}"
+            return render(
+                request,
+                "documents_soon.html",
+                _documents_upload_context(draft, ocr_provider=ocr_provider, error=message),
+                status_code=422,
+            )
+
+    # ONE OCR call carrying every photo in this batch (see
+    # app.ocr.provider.OcrProvider.recognize) -- never one call per photo.
+    # The model itself works out which photo is which document type and
+    # applies the source rules baked into the prompt (vehicle fields only
+    # ever come from a vehicle registration document, never from a
+    # passport/license/power-of-attorney also present in the same batch);
+    # there is no app-level merge/reconciliation step downstream of this.
     started_at = time.monotonic()
+    images = [(image, "image/jpeg") for image in normalized_images]
     try:
-        ocr_result = ocr_provider.recognize(normalized_image, "image/jpeg")
+        ocr_result = ocr_provider.recognize(images)
     except OcrProviderError as exc:
         # Log the provider/duration/safe error classification only -- never
         # str(exc)/exc.classification's underlying message/body, which could
@@ -407,6 +455,7 @@ def post_documents_upload(
             properties={
                 "provider": "vision",
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "files_count": len(uploaded),
                 "error_type": type(exc).__name__,
                 **exc.classification,
             },
@@ -430,7 +479,12 @@ def post_documents_upload(
             session_id=session_id,
             order_id=None,
             event_name="ocr_failed",
-            properties={"provider": ocr_result.provider, "duration_ms": duration_ms, "fields_found_count": 0},
+            properties={
+                "provider": ocr_result.provider,
+                "duration_ms": duration_ms,
+                "files_count": len(uploaded),
+                "fields_found_count": 0,
+            },
         )
         return render(
             request,
@@ -449,7 +503,12 @@ def post_documents_upload(
         session_id=session_id,
         order_id=None,
         event_name="ocr_success" if ocr_result.is_complete_for_checkout else "ocr_partial",
-        properties={"provider": ocr_result.provider, "duration_ms": duration_ms, "fields_found_count": ocr_result.fields_found_count},
+        properties={
+            "provider": ocr_result.provider,
+            "duration_ms": duration_ms,
+            "files_count": len(uploaded),
+            "fields_found_count": ocr_result.fields_found_count,
+        },
     )
 
     # Partial recognition is still success (section 18) -- whatever wasn't
@@ -457,6 +516,13 @@ def post_documents_upload(
     # the redirect below) lets the user fill in or correct the rest. Hint
     # text is transient review context only, never a stand-in for a real
     # manufacturer_id/model_id (see app.ocr.models.VehicleDataCandidates).
+    #
+    # ocr_* keys below are /policyholder's initial-autofill-only source (see
+    # get_policyholder) -- never re-applied once the user has typed/saved
+    # anything of their own (see post_policyholder/get_edit_policyholder).
+    # citizenship is matched against app.countries.COUNTRIES HERE, once, so
+    # every reader of this draft key already holds a value safe to
+    # preselect verbatim -- never the raw, unvalidated OCR string.
     merge_draft(
         conn,
         session_id,
@@ -469,6 +535,11 @@ def post_documents_upload(
             "model_id": candidates.model_id,
             "ocr_manufacturer_hint": candidates.manufacturer_text if not candidates.manufacturer_id else None,
             "ocr_model_hint": candidates.model_text if not candidates.model_id else None,
+            "ocr_policyholder_full_name": ocr_result.policyholder_full_name,
+            "ocr_identification_number": ocr_result.passport_number,
+            "ocr_citizenship": match_citizenship_text(ocr_result.citizenship),
+            "ocr_driver_full_name": ocr_result.driver_full_name,
+            "ocr_owner_full_name": ocr_result.owner_full_name,
         },
     )
     return _redirect("/vehicle")
@@ -681,6 +752,116 @@ def api_vehicle_models(manufacturer_id: int, conn: sqlite3.Connection = Depends(
 # ---------------------------------------------------------------------------
 
 
+def _driver_context(
+    *, same_as: bool, full_name: str = "", identifier: str = "", citizenship: str = "", phone: str = "", email: str = ""
+) -> dict:
+    return {
+        "same_as_policyholder": same_as,
+        "full_name": full_name or "",
+        "identifier": identifier or "",
+        "citizenship": citizenship or "",
+        "phone": phone or "",
+        "email": email or "",
+    }
+
+
+def _owner_context(
+    *,
+    same_as: bool,
+    entity_type: str = "individual",
+    full_name: str = "",
+    identifier: str = "",
+    citizenship: str = "",
+    phone: str = "",
+    email: str = "",
+) -> dict:
+    return {
+        "same_as_policyholder": same_as,
+        "entity_type": entity_type or "individual",
+        "full_name": full_name or "",
+        "identifier": identifier or "",
+        "citizenship": citizenship or "",
+        "phone": phone or "",
+        "email": email or "",
+    }
+
+
+def _driver_context_from_submission(form: dict) -> dict:
+    return _driver_context(
+        same_as=form.get("driver_same_as_policyholder", "yes") != "no",
+        full_name=form.get("driver_full_name", ""),
+        identifier=form.get("driver_identifier", ""),
+        citizenship=form.get("driver_citizenship", ""),
+        phone=form.get("driver_phone", ""),
+        email=form.get("driver_email", ""),
+    )
+
+
+def _owner_context_from_submission(form: dict) -> dict:
+    return _owner_context(
+        same_as=form.get("owner_same_as_policyholder", "yes") != "no",
+        entity_type=form.get("owner_entity_type", "individual"),
+        full_name=form.get("owner_full_name", ""),
+        identifier=form.get("owner_identifier", ""),
+        citizenship=form.get("owner_citizenship", ""),
+        phone=form.get("owner_phone", ""),
+        email=form.get("owner_email", ""),
+    )
+
+
+def _driver_context_from_order(order: Order) -> dict:
+    return _driver_context(
+        same_as=order.driver_same_as_policyholder,
+        full_name=order.driver_full_name,
+        identifier=order.driver_identifier,
+        citizenship=order.driver_citizenship,
+        phone=order.driver_phone,
+        email=order.driver_email,
+    )
+
+
+def _owner_context_from_order(order: Order) -> dict:
+    return _owner_context(
+        same_as=order.owner_same_as_policyholder,
+        entity_type=order.owner_entity_type,
+        full_name=order.owner_full_name,
+        identifier=order.owner_identifier,
+        citizenship=order.owner_citizenship,
+        phone=order.owner_phone,
+        email=order.owner_email,
+    )
+
+
+def _policyholder_context(
+    *,
+    errors: dict,
+    full_name: str,
+    identification_number: str,
+    citizenship: str,
+    contacts: dict,
+    driver: dict,
+    owner: dict,
+    steps: list,
+    form_action: str,
+    back_url: str,
+    submit_label: str,
+) -> dict:
+    return {
+        "errors": errors,
+        "full_name": full_name,
+        "identification_number": identification_number,
+        "citizenship": citizenship,
+        "countries": COUNTRIES,
+        "contacts": contacts,
+        "driver": driver,
+        "owner": owner,
+        "steps": steps,
+        "form_action": form_action,
+        "back_url": back_url,
+        "submit_label": submit_label,
+    }
+
+
 @router.get("/policyholder")
 def get_policyholder(
     request: Request,
@@ -690,18 +871,28 @@ def get_policyholder(
     draft = get_draft(conn, session_id)
     if not _require_draft_keys(draft, ("manufacturer_id", "model_id")):
         return _redirect("/vehicle")
+    # Initial autofill ONLY -- draft OCR hints prefill an otherwise-empty
+    # form the very first time this page renders; they never re-apply once
+    # the user has submitted anything of their own (see post_policyholder,
+    # which always re-renders from the SUBMITTED values on error, never
+    # back from these draft hints) or once an order exists (see
+    # get_edit_policyholder, which never reads the draft at all).
     return render(
         request,
         "policyholder.html",
-        {
-            "errors": {},
-            "full_name": "",
-            "contacts": _EMPTY_CONTACTS,
-            "steps": build_draft_steps(draft, 5),
-            "form_action": "/policyholder",
-            "back_url": "/vehicle",
-            "submit_label": "Продолжить",
-        },
+        _policyholder_context(
+            errors={},
+            full_name=draft.get("ocr_policyholder_full_name") or "",
+            identification_number=draft.get("ocr_identification_number") or "",
+            citizenship=draft.get("ocr_citizenship") or "",
+            contacts=_EMPTY_CONTACTS,
+            driver=_driver_context(same_as=True, full_name=draft.get("ocr_driver_full_name") or ""),
+            owner=_owner_context(same_as=True, full_name=draft.get("ocr_owner_full_name") or ""),
+            steps=build_draft_steps(draft, 5),
+            form_action="/policyholder",
+            back_url="/vehicle",
+            submit_label="Продолжить",
+        ),
     )
 
 
@@ -709,11 +900,26 @@ def get_policyholder(
 def post_policyholder(
     request: Request,
     full_name: str = Form(""),
+    identification_number: str = Form(""),
+    citizenship: str = Form(""),
     contact_email: str = Form(""),
     contact_telegram: str = Form(""),
     contact_phone: str = Form(""),
     contact_max: str = Form(""),
     contact_other: str = Form(""),
+    driver_same_as_policyholder: str = Form("yes"),
+    driver_full_name: str = Form(""),
+    driver_identifier: str = Form(""),
+    driver_citizenship: str = Form(""),
+    driver_phone: str = Form(""),
+    driver_email: str = Form(""),
+    owner_same_as_policyholder: str = Form("yes"),
+    owner_entity_type: str = Form("individual"),
+    owner_full_name: str = Form(""),
+    owner_identifier: str = Form(""),
+    owner_citizenship: str = Form(""),
+    owner_phone: str = Form(""),
+    owner_email: str = Form(""),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -728,24 +934,58 @@ def post_policyholder(
         "contact_max": contact_max,
         "contact_other": contact_other,
     }
-    clean_name, name_error = validate_full_name(full_name)
-    clean_contacts, errors = validate_contacts_form(submitted_contacts)
+    driver_form = {
+        "driver_same_as_policyholder": driver_same_as_policyholder,
+        "driver_full_name": driver_full_name,
+        "driver_identifier": driver_identifier,
+        "driver_citizenship": driver_citizenship,
+        "driver_phone": driver_phone,
+        "driver_email": driver_email,
+    }
+    owner_form = {
+        "owner_same_as_policyholder": owner_same_as_policyholder,
+        "owner_entity_type": owner_entity_type,
+        "owner_full_name": owner_full_name,
+        "owner_identifier": owner_identifier,
+        "owner_citizenship": owner_citizenship,
+        "owner_phone": owner_phone,
+        "owner_email": owner_email,
+    }
 
-    if name_error or errors:
-        if name_error:
-            errors["full_name"] = name_error
+    clean_name, name_error = validate_full_name(full_name)
+    clean_identification_number, id_error = validate_identification_number(
+        identification_number, field_label="Идентификационный номер"
+    )
+    clean_citizenship, citizenship_error = validate_citizenship(citizenship)
+    clean_contacts, errors = validate_contacts_form(submitted_contacts)
+    driver_clean, driver_errors = validate_driver_form(driver_form)
+    owner_clean, owner_errors = validate_owner_form(owner_form)
+    errors.update(driver_errors)
+    errors.update(owner_errors)
+    if name_error:
+        errors["full_name"] = name_error
+    if id_error:
+        errors["identification_number"] = id_error
+    if citizenship_error:
+        errors["citizenship"] = citizenship_error
+
+    if errors:
         return render(
             request,
             "policyholder.html",
-            {
-                "errors": errors,
-                "full_name": full_name,
-                "contacts": submitted_contacts,
-                "steps": build_draft_steps(draft, 5),
-                "form_action": "/policyholder",
-                "back_url": "/vehicle",
-                "submit_label": "Продолжить",
-            },
+            _policyholder_context(
+                errors=errors,
+                full_name=full_name,
+                identification_number=identification_number,
+                citizenship=citizenship,
+                contacts=submitted_contacts,
+                driver=_driver_context_from_submission(driver_form),
+                owner=_owner_context_from_submission(owner_form),
+                steps=build_draft_steps(draft, 5),
+                form_action="/policyholder",
+                back_url="/vehicle",
+                submit_label="Продолжить",
+            ),
             status_code=422,
         )
 
@@ -777,6 +1017,8 @@ def post_policyholder(
         model_id=model.id,
         model_name=model.name,
         full_name=clean_name,
+        identification_number=clean_identification_number,
+        citizenship=clean_citizenship,
         contact_email=clean_contacts["contact_email"],
         contact_telegram=clean_contacts["contact_telegram"],
         contact_phone=clean_contacts["contact_phone"],
@@ -784,6 +1026,8 @@ def post_policyholder(
         contact_other=clean_contacts["contact_other"],
         customer_currency="RUB",
         purchase_currency="GEL",
+        **driver_clean,
+        **owner_clean,
     )
     log_event(conn, session_id=session_id, order_id=order.id, event_name="policyholder_provided")
     # The draft has now been fully consumed into a real order — clear it so
@@ -1031,18 +1275,27 @@ def get_edit_policyholder(
     request: Request,
     order: Order = Depends(get_order_or_404),
 ):
+    # Never touches the pre-order draft/OCR hints -- an existing order's
+    # OWN saved values always win here (see the OCR task report's priority
+    # order: saved Order value > submitted form value > OCR autofill >
+    # empty). OCR only ever pre-fills the ONE-TIME /policyholder GET before
+    # an order exists (see get_policyholder above).
     return render(
         request,
         "policyholder.html",
-        {
-            "errors": {},
-            "full_name": order.full_name,
-            "contacts": order.contact_form_values,
-            "steps": build_order_steps(order, 5),
-            "form_action": f"/o/{order.resume_token}/edit-policyholder",
-            "back_url": f"/o/{order.resume_token}/summary",
-            "submit_label": "Сохранить",
-        },
+        _policyholder_context(
+            errors={},
+            full_name=order.full_name,
+            identification_number=order.identification_number or "",
+            citizenship=order.citizenship or "",
+            contacts=order.contact_form_values,
+            driver=_driver_context_from_order(order),
+            owner=_owner_context_from_order(order),
+            steps=build_order_steps(order, 5),
+            form_action=f"/o/{order.resume_token}/edit-policyholder",
+            back_url=f"/o/{order.resume_token}/summary",
+            submit_label="Сохранить",
+        ),
     )
 
 
@@ -1051,11 +1304,26 @@ def post_edit_policyholder(
     request: Request,
     resume_token: str,
     full_name: str = Form(""),
+    identification_number: str = Form(""),
+    citizenship: str = Form(""),
     contact_email: str = Form(""),
     contact_telegram: str = Form(""),
     contact_phone: str = Form(""),
     contact_max: str = Form(""),
     contact_other: str = Form(""),
+    driver_same_as_policyholder: str = Form("yes"),
+    driver_full_name: str = Form(""),
+    driver_identifier: str = Form(""),
+    driver_citizenship: str = Form(""),
+    driver_phone: str = Form(""),
+    driver_email: str = Form(""),
+    owner_same_as_policyholder: str = Form("yes"),
+    owner_entity_type: str = Form("individual"),
+    owner_full_name: str = Form(""),
+    owner_identifier: str = Form(""),
+    owner_citizenship: str = Form(""),
+    owner_phone: str = Form(""),
+    owner_email: str = Form(""),
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -1066,24 +1334,58 @@ def post_edit_policyholder(
         "contact_max": contact_max,
         "contact_other": contact_other,
     }
-    clean_name, name_error = validate_full_name(full_name)
-    clean_contacts, errors = validate_contacts_form(submitted_contacts)
+    driver_form = {
+        "driver_same_as_policyholder": driver_same_as_policyholder,
+        "driver_full_name": driver_full_name,
+        "driver_identifier": driver_identifier,
+        "driver_citizenship": driver_citizenship,
+        "driver_phone": driver_phone,
+        "driver_email": driver_email,
+    }
+    owner_form = {
+        "owner_same_as_policyholder": owner_same_as_policyholder,
+        "owner_entity_type": owner_entity_type,
+        "owner_full_name": owner_full_name,
+        "owner_identifier": owner_identifier,
+        "owner_citizenship": owner_citizenship,
+        "owner_phone": owner_phone,
+        "owner_email": owner_email,
+    }
 
-    if name_error or errors:
-        if name_error:
-            errors["full_name"] = name_error
+    clean_name, name_error = validate_full_name(full_name)
+    clean_identification_number, id_error = validate_identification_number(
+        identification_number, field_label="Идентификационный номер"
+    )
+    clean_citizenship, citizenship_error = validate_citizenship(citizenship)
+    clean_contacts, errors = validate_contacts_form(submitted_contacts)
+    driver_clean, driver_errors = validate_driver_form(driver_form)
+    owner_clean, owner_errors = validate_owner_form(owner_form)
+    errors.update(driver_errors)
+    errors.update(owner_errors)
+    if name_error:
+        errors["full_name"] = name_error
+    if id_error:
+        errors["identification_number"] = id_error
+    if citizenship_error:
+        errors["citizenship"] = citizenship_error
+
+    if errors:
         return render(
             request,
             "policyholder.html",
-            {
-                "errors": errors,
-                "full_name": full_name,
-                "contacts": submitted_contacts,
-                "steps": build_order_steps(order, 5),
-                "form_action": f"/o/{resume_token}/edit-policyholder",
-                "back_url": f"/o/{resume_token}/summary",
-                "submit_label": "Сохранить",
-            },
+            _policyholder_context(
+                errors=errors,
+                full_name=full_name,
+                identification_number=identification_number,
+                citizenship=citizenship,
+                contacts=submitted_contacts,
+                driver=_driver_context_from_submission(driver_form),
+                owner=_owner_context_from_submission(owner_form),
+                steps=build_order_steps(order, 5),
+                form_action=f"/o/{resume_token}/edit-policyholder",
+                back_url=f"/o/{resume_token}/summary",
+                submit_label="Сохранить",
+            ),
             status_code=422,
         )
 
@@ -1091,10 +1393,14 @@ def post_edit_policyholder(
         conn,
         order.id,
         full_name=clean_name,
+        identification_number=clean_identification_number,
+        citizenship=clean_citizenship,
         contact_email=clean_contacts["contact_email"],
         contact_telegram=clean_contacts["contact_telegram"],
         contact_phone=clean_contacts["contact_phone"],
         contact_max=clean_contacts["contact_max"],
         contact_other=clean_contacts["contact_other"],
+        **driver_clean,
+        **owner_clean,
     )
     return _redirect(f"/o/{resume_token}/summary")

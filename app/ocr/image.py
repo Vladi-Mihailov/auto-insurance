@@ -15,6 +15,13 @@ ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 ALLOWED_CONTENT_TYPES = ("image/jpeg", "image/png", "image/webp")
 _ALLOWED_PIL_FORMATS = ("JPEG", "PNG", "WEBP")
 
+# A vehicle document set is a handful of photos (front/back of one document,
+# or a couple of alternate shots) -- not a bulk-upload feature. Kept small
+# and explicit rather than "generous": each extra file is one more OpenAI
+# vision call (see app.ocr.provider), so this bounds both cost and the
+# number of images a single request has to validate/normalize.
+MAX_FILES_PER_RECOGNITION = 5
+
 # Longest side an image is downscaled to before an API call -- keeps text
 # legible while bounding request size/cost; images already smaller than
 # this are left untouched (never upscaled/"enhanced").

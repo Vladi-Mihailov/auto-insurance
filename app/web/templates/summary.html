@@ -58,12 +58,36 @@
         <span class="summary-card__label">ФИО</span>
         <span>{{ order.full_name }}</span>
       </div>
+      {% if order.identification_number %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Идентификационный номер</span>
+        <span>{{ order.identification_number }}</span>
+      </div>
+      {% endif %}
+      {% if order.citizenship %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Гражданство</span>
+        <span>{{ order.citizenship }}</span>
+      </div>
+      {% endif %}
       {% for label, value in order.contact_rows %}
       <div class="summary-card__row">
         <span class="summary-card__label">{{ label }}</span>
         <span>{{ value }}</span>
       </div>
       {% endfor %}
+      {% if not order.driver_same_as_policyholder %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Водитель</span>
+        <span>{{ order.driver_full_name }}</span>
+      </div>
+      {% endif %}
+      {% if not order.owner_same_as_policyholder %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">{{ "Владелец (юр. лицо)" if order.owner_entity_type == "legal" else "Владелец" }}</span>
+        <span>{{ order.owner_full_name }}</span>
+      </div>
+      {% endif %}
     </div>
 
     <div class="summary-card__total">

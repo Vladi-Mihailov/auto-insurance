@@ -114,6 +114,39 @@ _ORDER_COLUMN_MIGRATIONS = [
     ("contact_phone", "TEXT"),
     ("contact_max", "TEXT"),
     ("contact_other", "TEXT"),
+    # Policyholder's own identity fields (tpl.ge parity, see /policyholder)
+    # -- bare names matching full_name's own naming convention (no
+    # "policyholder_" prefix; the Order's primary identity fields ARE the
+    # policyholder's by convention already, see full_name/contact_* above).
+    # citizenship, when set, is always one of app.countries.COUNTRIES.
+    ("identification_number", "TEXT"),
+    ("citizenship", "TEXT"),
+    # Driver/owner ("Водитель"/"Владелец" — tpl.ge parity, see /policyholder).
+    # *_same_as_policyholder default to 1 (true) via the column DEFAULT
+    # itself, not just app-code -- so a pre-existing order, which never had
+    # a driver/owner concept at all, reads back as "same as policyholder"
+    # (the normal, unremarkable case) rather than NULL/false. The *_full_name/
+    # identifier/citizenship/phone/email columns stay NULL for such an order,
+    # same as any other never-collected optional field.
+    ("driver_same_as_policyholder", "INTEGER NOT NULL DEFAULT 1"),
+    ("driver_full_name", "TEXT"),
+    ("driver_identifier", "TEXT"),
+    ("driver_citizenship", "TEXT"),
+    ("driver_phone", "TEXT"),
+    ("driver_email", "TEXT"),
+    ("owner_same_as_policyholder", "INTEGER NOT NULL DEFAULT 1"),
+    # "individual" | "legal" -- only meaningful when owner_same_as_policyholder
+    # is false; NULL otherwise (see app.validation.validate_owner_form).
+    ("owner_entity_type", "TEXT"),
+    # For a legal entity owner, this holds the company name and
+    # owner_identifier holds its identification code -- same two columns,
+    # relabeled per entity_type, rather than a parallel set of company-only
+    # columns (see the OCR task report's "OWNER" section for why).
+    ("owner_full_name", "TEXT"),
+    ("owner_identifier", "TEXT"),
+    ("owner_citizenship", "TEXT"),  # individual only; NULL for legal entities
+    ("owner_phone", "TEXT"),
+    ("owner_email", "TEXT"),
 ]
 
 # NULL means "this manufacturer's models have never been synced" — distinct
@@ -130,7 +163,28 @@ _COLUMN_MIGRATIONS = {
 
 
 def get_connection(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: FastAPI dispatches every sync dependency in a
+    # request's chain (app.deps.get_db itself, get_session_id, the sync
+    # endpoint function, teardown) via its OWN separate
+    # starlette.concurrency.run_in_threadpool -> anyio.to_thread.run_sync
+    # call. anyio services each of those from a shared, floating worker-
+    # thread pool -- nothing pins a request's dependency chain to one OS
+    # thread, so under real concurrent load the connection app.deps.get_db
+    # creates in one worker thread routinely gets used from a different one
+    # moments later (reproduced deterministically in
+    # tests/test_db.py::test_concurrent_requests_do_not_hit_sqlite_cross_thread_error,
+    # which fails with sqlite3's default check_same_thread=True and passes
+    # with it disabled). This is safe specifically because of how this
+    # function is used: app.deps.get_db creates a brand-new Connection per
+    # request and never shares it across requests or stores it in any
+    # global/cache, so within one request's lifetime the handoffs between
+    # threads are strictly sequential (each awaited dispatch completes
+    # before the next begins) -- never two threads touching the connection
+    # at the same instant. Disabling the same-thread check only removes a
+    # guarantee this usage pattern never relied on; it does not make
+    # genuinely concurrent access to a shared connection safe, and nothing
+    # here introduces that.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
