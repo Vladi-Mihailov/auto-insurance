@@ -20,6 +20,7 @@
     </div>
     {% endif %}
     {% if payment.transfer_url %}
+    <a href="{{ payment.transfer_url }}" target="_blank" rel="noopener noreferrer" class="payment-transfer-url">{{ payment.transfer_url }}</a>
     <a href="{{ payment.transfer_url }}" target="_blank" rel="noopener noreferrer" class="btn btn--primary btn--lg btn--block">Перейти к оплате</a>
     {% endif %}
   </div>

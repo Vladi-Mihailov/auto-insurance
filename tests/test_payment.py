@@ -424,6 +424,51 @@ def test_qr_and_transfer_link_both_render_when_both_configured(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_transfer_url_visible_as_text_link_under_qr(monkeypatch):
+    """A second, distinct link right under the QR that shows the raw URL
+    as visible text (not just as an href on the "Перейти к оплате"
+    button) -- uses the existing payment.transfer_url value, no new env
+    var, no hardcoded URL. Placed as the QR image's next sibling in the
+    template (see payment.html), so it renders immediately under it."""
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY019SS")
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        # the raw URL is visible TEXT, not just an href attribute
+        assert (
+            '<a href="https://example.test/pay/fake-local-placeholder" target="_blank" rel="noopener noreferrer" '
+            'class="payment-transfer-url">https://example.test/pay/fake-local-placeholder</a>' in response.text
+        )
+        # it appears after the QR image, not before it (i.e. "under" it)
+        qr_pos = response.text.index("payment-qr__image")
+        link_pos = response.text.index("payment-transfer-url")
+        assert qr_pos < link_pos
+        # the big "Перейти к оплате" button stays below the new text link
+        button_pos = response.text.index("Перейти к оплате")
+        assert link_pos < button_pos
+    finally:
+        get_settings.cache_clear()
+
+
+def test_transfer_url_text_link_absent_when_transfer_url_not_configured(monkeypatch):
+    """QR alone, no transfer_url -- no text link, no dangling empty href."""
+    monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
+    get_settings.cache_clear()
+    try:
+        client_ = TestClient(app)
+        resume_token = _create_order_awaiting_payment(client_, plate="PAY020TT")
+        response = client_.get(f"/o/{resume_token}/payment")
+        assert response.status_code == 200
+        assert "payment-qr__image" in response.text
+        assert "payment-transfer-url" not in response.text
+    finally:
+        get_settings.cache_clear()
+
+
 def test_awaiting_payment_shows_payment_controls(monkeypatch):
     monkeypatch.setenv("PAYMENT_QR_IMAGE_URL", "/static/img/payment-qr-test.png")
     monkeypatch.setenv("PAYMENT_TRANSFER_URL", "https://example.test/pay/fake-local-placeholder")
@@ -478,6 +523,7 @@ def test_payment_review_hides_qr_link_and_card(monkeypatch):
         assert "Оплата проверяется" in response.text
         assert "payment-qr__image" not in response.text
         assert "Перейти к оплате" not in response.text
+        assert "payment-transfer-url" not in response.text
         assert "card-number" not in response.text
     finally:
         get_settings.cache_clear()
@@ -506,6 +552,7 @@ def test_paid_hides_qr_link_and_card(monkeypatch):
         assert "Оплата подтверждена" in response.text
         assert "payment-qr__image" not in response.text
         assert "Перейти к оплате" not in response.text
+        assert "payment-transfer-url" not in response.text
         assert "card-number" not in response.text
     finally:
         get_settings.cache_clear()
