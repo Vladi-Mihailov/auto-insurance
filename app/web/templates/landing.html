@@ -1,28 +1,64 @@
 {% extends "base.html" %}
-{% from "_flags.html" import flag_icon %}
-{% block title %}Автостраховка для поездок в Грузию, Армению, Турцию{% endblock %}
+{% block title %}ОСАГО GO — страховка для поездок в Грузию, Армению, Турцию{% endblock %}
 {% block page_class %} page--home{% endblock %}
 {% block content %}
 
-<section class="hero-photo">
-  <img src="/static/img/hero-road.jpg" alt="" class="hero-photo__img">
-  <div class="hero-photo__scrim" aria-hidden="true"></div>
-  <div class="hero-photo__content">
-    <h1 class="hero-photo__title">В дорогу —<br>уже со страховкой</h1>
-    <p class="hero-photo__subtitle">ОСАГО для поездки на автомобиле.<br>Оформление онлайн. Без посещения офиса.</p>
-    <a class="btn btn--primary btn--lg hero-photo__cta" href="/start">
-      {% if ge_price_rub %}Оформить для Грузии — от <span class="nowrap">{{ ge_price_rub | rub }} ₽</span>{% else %}Оформить для Грузии{% endif %}
-    </a>
-  </div>
+<section class="hero-banner">
+  <!--
+    This is the approved, final hero banner (design already includes the
+    headline, subtitle, brand mark, illustration, and the Telegram/MAX/VK
+    contact rows) -- rendered as one image, not reconstructed in HTML/CSS.
+    Only the CTA and the three contact rows need to be real/clickable, so
+    transparent links are positioned over their exact coordinates (see
+    .hero-banner__hotspot / .hero-banner__contact in style.css) -- sized in
+    %, so they track the image responsively at any display width instead
+    of using fixed pixels.
+  -->
+  <img
+    src="/static/img/hero-banner.png"
+    alt="ОСАГО GO — страховка в дорогу. ОСАГО для Грузии, Армении и Турции. Оформление онлайн без посещения офиса. Контакты: Telegram, MAX, VK."
+    class="hero-banner__img"
+  >
+  <a
+    class="hero-banner__hotspot"
+    href="/start"
+    aria-label="{% if ge_price_rub %}Оформить для Грузии — от {{ ge_price_rub | rub }} ₽{% else %}Оформить для Грузии{% endif %}"
+  ></a>
+  {% if contacts.telegram_url %}
+  <a
+    class="hero-banner__contact hero-banner__contact--telegram"
+    href="{{ contacts.telegram_url }}"
+    target="_blank"
+    rel="noopener"
+    aria-label="Telegram"
+  ></a>
+  {% endif %}
+  {% if contacts.max_url %}
+  <a
+    class="hero-banner__contact hero-banner__contact--max"
+    href="{{ contacts.max_url }}"
+    target="_blank"
+    rel="noopener"
+    aria-label="MAX"
+  ></a>
+  {% endif %}
+  {% if contacts.vk_url %}
+  <a
+    class="hero-banner__contact hero-banner__contact--vk"
+    href="{{ contacts.vk_url }}"
+    target="_blank"
+    rel="noopener"
+    aria-label="VK"
+  ></a>
+  {% endif %}
 </section>
 
 <section class="countries">
   <div class="countries__grid">
     <a class="country-card country-card--active" href="/start">
       <div class="country-card__photo">
-        <img src="/static/img/country-georgia.jpg" alt="" class="country-card__photo-img">
+        <img src="/static/img/country-georgia.jpg?v=2" alt="" class="country-card__photo-img">
         <div class="country-card__photo-scrim" aria-hidden="true"></div>
-        <span class="country-card__flag">{{ flag_icon('ge') }}</span>
         <span class="country-card__name">Грузия</span>
       </div>
       <div class="country-card__body">
@@ -34,52 +70,32 @@
       </div>
     </a>
 
-    <div class="country-card country-card--soon" aria-disabled="true">
+    <div class="country-card country-card--soon">
       <div class="country-card__photo">
-        <img src="/static/img/country-armenia.jpg" alt="" class="country-card__photo-img">
+        <img src="/static/img/country-armenia.jpg?v=2" alt="" class="country-card__photo-img">
         <div class="country-card__photo-scrim" aria-hidden="true"></div>
-        <span class="country-card__flag">{{ flag_icon('am') }}</span>
         <span class="country-card__name">Армения</span>
       </div>
       <div class="country-card__body">
         <span class="country-card__text">
           <span class="country-card__desc">ОСАГО для поездки в Армению</span>
-          <span class="country-card__soon-label">Скоро</span>
+          <a class="country-card__operator-link" href="#help">Оформить через оператора →</a>
         </span>
       </div>
     </div>
 
-    <div class="country-card country-card--soon" aria-disabled="true">
+    <div class="country-card country-card--soon">
       <div class="country-card__photo">
-        <img src="/static/img/country-turkey.jpg" alt="" class="country-card__photo-img">
+        <img src="/static/img/country-turkey.jpg?v=2" alt="" class="country-card__photo-img">
         <div class="country-card__photo-scrim" aria-hidden="true"></div>
-        <span class="country-card__flag">{{ flag_icon('tr') }}</span>
         <span class="country-card__name">Турция</span>
       </div>
       <div class="country-card__body">
         <span class="country-card__text">
           <span class="country-card__desc">ОСАГО для поездки в Турцию</span>
-          <span class="country-card__soon-label">Скоро</span>
+          <a class="country-card__operator-link" href="#help">Оформить через оператора →</a>
         </span>
       </div>
-    </div>
-  </div>
-</section>
-
-<section class="how-it-works">
-  <h2 class="how-it-works__title">Просто. Быстро. Надёжно.</h2>
-  <div class="steps-row">
-    <div class="step-item">
-      <span class="step-item__num">1</span>
-      <span class="step-item__title">Выберите срок</span>
-    </div>
-    <div class="step-item">
-      <span class="step-item__num">2</span>
-      <span class="step-item__title">Загрузите документы</span>
-    </div>
-    <div class="step-item">
-      <span class="step-item__num">3</span>
-      <span class="step-item__title">Получите полис</span>
     </div>
   </div>
 </section>
@@ -122,8 +138,7 @@
 {% endif %}
 
 <p class="photo-credits">
-  Фото: <a href="https://commons.wikimedia.org/wiki/File:Georgian_Military_Highway_01_(B).jpg" target="_blank" rel="noopener">Georgian Military Highway</a> — Morten Oddvik (CC BY 2.0);
-  <a href="https://commons.wikimedia.org/wiki/File:Georgia_Georgian_Military_Road_Zemo_Mleta_(30502222363).jpg" target="_blank" rel="noopener">Zemo Mleta</a> — shankar s. (CC BY 2.0);
+  Фото: <a href="https://commons.wikimedia.org/wiki/File:Georgia_Georgian_Military_Road_Zemo_Mleta_(30502222363).jpg" target="_blank" rel="noopener">Zemo Mleta</a> — shankar s. (CC BY 2.0);
   <a href="https://commons.wikimedia.org/wiki/File:Mount_Ararat_and_the_Yerevan_skyline.jpg" target="_blank" rel="noopener">Yerevan &amp; Ararat</a> — Serouj Ourishian (CC BY-SA 3.0);
   <a href="https://commons.wikimedia.org/wiki/File:Bosphorus_Bridge,_Istanbul_(4460344963).jpg" target="_blank" rel="noopener">Bosphorus Bridge</a> — Antony Stanley (CC BY-SA 2.0). Wikimedia Commons.
 </p>

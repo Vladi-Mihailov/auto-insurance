@@ -150,8 +150,12 @@ def validate_identification_number(raw: str, *, field_label: str) -> tuple[str |
     restricted to Latin script like validate_full_name -- this is a
     document identifier (digits/letters in whatever form the issuing
     country prints it), not a personal name tpl.ge's Latin-only FAQ rule
-    was written for."""
-    value = _collapse_spaces(raw).upper()
+    was written for. OCR sometimes reads the "№" sign printed next to the
+    number on a passport (e.g. "67№1647108"), which existing validation
+    doesn't accept -- stripped here (along with any spaces right around it)
+    rather than added to the allowed-character set, so stored values stay
+    restricted to letters/digits/space/hyphen."""
+    value = _collapse_spaces(re.sub(r"\s*№\s*", "", raw or "")).upper()
     if not value:
         return None, f"{field_label}: заполните это поле"
     if not (2 <= len(value) <= 30):

@@ -31,6 +31,16 @@ html, body {
   padding: 0;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
 body {
   background: var(--background);
   color: var(--text);
@@ -1114,20 +1124,21 @@ a.progress__num:hover {
 
 /* ==========================================================================
    Homepage — Variant 2 ("В дорогу"): big hero photo, three country cards
-   (Georgia active, Armenia/Turkey "Скоро"), a short how-it-works strip, and
-   a support/contact block. Wider container than the checkout wizard;
+   (Georgia active/automated, Armenia/Turkey routed to an operator via the
+   support block), and a support/contact block. Wider container than the
+   checkout wizard;
    scoped to .page--home so the checkout screens (still 480px, mobile-first)
    are untouched.
    ========================================================================== */
 
 .page--home {
   gap: 0;
+  padding-top: 20px;
 }
 
 @media (min-width: 960px) {
   .page--home {
     max-width: 1180px;
-    padding-top: 28px;
   }
 }
 
@@ -1182,107 +1193,61 @@ a.progress__num:hover {
   }
 }
 
-/* ---------- hero ---------- */
+/* ---------- hero banner (approved final asset, rendered as one image --
+   see landing.html's comment on .hero-banner) ---------- */
 
-.hero-photo {
+.hero-banner {
   position: relative;
-  margin-top: 20px;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  /* Fixed height (not aspect-ratio) so it stays predictable regardless of
-     container width -- object-fit: cover on .hero-photo__img below still
-     does all the actual image cropping, never stretching/squashing it. */
-  height: 420px;
-  display: flex;
 }
 
-.hero-photo__img {
-  position: absolute;
-  inset: 0;
+.hero-banner__img {
+  display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
+  height: auto;
+  /* No border-radius/overflow-hidden here on purpose -- the banner already
+     has its rounded card + shadow baked in against a near-white
+     background that matches --background exactly (verified against the
+     source file), so adding our own would only risk clipping it. */
 }
 
-/* Bottom-up scrim on mobile (content sits at the bottom), left-to-right
-   scrim on desktop (content sits at the left) — see the two rules below.
-   Both are decorative gradients over a photo, not text-carrying content. */
-.hero-photo__scrim {
+/* Transparent hotspots over the button and contact rows already drawn into
+   the image. Percentage-based boxes (measured directly from the source
+   PNG's pixel coordinates, 2168x699) so they track the image precisely at
+   any displayed size -- they always share the same aspect ratio since the
+   image is `width:100%; height:auto` on its own intrinsic ratio. */
+.hero-banner__hotspot {
   position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, rgba(10, 14, 20, 0.82) 0%, rgba(10, 14, 20, 0.35) 45%, rgba(10, 14, 20, 0.05) 75%);
+  left: 2.86%;
+  top: 42.20%;
+  width: 25.92%;
+  height: 13.73%;
 }
 
-.hero-photo__content {
-  position: relative;
-  z-index: 1;
-  margin-top: auto;
-  padding: 28px 24px 32px;
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 560px;
+.hero-banner__contact {
+  position: absolute;
+  top: 80.83%;
+  height: 12.02%;
 }
 
-.hero-photo__title {
-  font-size: 2rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  line-height: 1.12;
-  margin: 0;
-  text-wrap: balance;
+.hero-banner__contact--telegram {
+  left: 2.58%;
+  width: 12.41%;
 }
 
-.hero-photo__subtitle {
-  font-size: 0.98rem;
-  line-height: 1.5;
-  color: rgba(255, 255, 255, 0.92);
-  margin: 0;
+.hero-banner__contact--max {
+  left: 18.31%;
+  width: 18.27%;
 }
 
-.hero-photo__cta {
-  align-self: stretch;
-  margin-top: 4px;
-}
-
-.hero-photo__cta .nowrap {
-  white-space: nowrap;
-}
-
-@media (min-width: 960px) {
-  .hero-photo {
-    height: 300px;
-  }
-
-  .hero-photo__scrim {
-    background: linear-gradient(100deg, rgba(10, 14, 20, 0.82) 0%, rgba(10, 14, 20, 0.55) 32%, rgba(10, 14, 20, 0.08) 62%);
-  }
-
-  .hero-photo__content {
-    margin-top: 0;
-    align-self: center;
-    padding: 0 0 0 56px;
-  }
-
-  .hero-photo__title {
-    font-size: 3rem;
-  }
-
-  .hero-photo__subtitle {
-    font-size: 1.05rem;
-  }
-
-  .hero-photo__cta {
-    align-self: flex-start;
-  }
+.hero-banner__contact--vk {
+  left: 38.88%;
+  width: 12.32%;
 }
 
 /* ---------- country cards ---------- */
 
 .countries {
-  margin-top: 28px;
+  margin-top: 20px;
 }
 
 .countries__grid {
@@ -1339,12 +1304,6 @@ a.country-card:focus-visible {
   background: linear-gradient(to top, rgba(10, 14, 20, 0.65) 0%, rgba(10, 14, 20, 0) 55%);
 }
 
-.country-card__flag {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-}
-
 .country-card__name {
   position: absolute;
   left: 14px;
@@ -1384,18 +1343,27 @@ a.country-card:focus-visible {
   color: var(--text);
 }
 
-.country-card__soon-label {
+.country-card__operator-link {
   display: inline-flex;
   align-self: flex-start;
-  font-size: 0.74rem;
+  align-items: center;
+  font-size: 0.85rem;
   font-weight: 600;
-  color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 3px 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.country-card__operator-link:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+}
+
+.country-card__operator-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .country-card__arrow {
@@ -1419,72 +1387,10 @@ a.country-card:hover .country-card__arrow {
   border-color: var(--accent);
 }
 
-.flag-icon {
-  display: block;
-  width: 30px;
-  height: 21px;
-  border-radius: 5px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
-  flex-shrink: 0;
-}
-
 @media (min-width: 960px) {
   .country-card__photo {
     height: 170px;
   }
-}
-
-/* ---------- how it works ---------- */
-
-.how-it-works {
-  margin-top: 40px;
-  text-align: center;
-}
-
-.how-it-works__title {
-  font-size: 1.3rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  margin: 0 0 24px;
-}
-
-.steps-row {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-}
-
-@media (min-width: 760px) {
-  .steps-row {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 32px;
-  }
-}
-
-.step-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.step-item__num {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--accent);
-  font-size: 1.05rem;
-  font-weight: 800;
-}
-
-.step-item__title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text);
 }
 
 /* ---------- support / contact block ---------- */

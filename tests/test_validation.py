@@ -2,6 +2,7 @@ from app.validation import (
     validate_contacts_form,
     validate_email,
     validate_full_name,
+    validate_identification_number,
     validate_identifier,
     validate_optional_phone,
     validate_registration_number,
@@ -31,6 +32,24 @@ def test_identifier_accepts_chassis_the_same_lenient_way_as_vin():
     value, error = validate_identifier("chs12345", "chassis")
     assert error is None
     assert value == "CHS12345"
+
+
+def test_identification_number_strips_ocr_number_sign():
+    value, error = validate_identification_number("67№1647108", field_label="Идентификационный номер")
+    assert error is None
+    assert value == "671647108"
+
+
+def test_identification_number_strips_number_sign_with_surrounding_spaces():
+    value, error = validate_identification_number("67 № 1647108", field_label="Идентификационный номер")
+    assert error is None
+    assert value == "671647108"
+
+
+def test_identification_number_accepts_already_valid_value_without_number_sign():
+    value, error = validate_identification_number("671647108", field_label="Идентификационный номер")
+    assert error is None
+    assert value == "671647108"
 
 
 def test_registration_number_allows_foreign_plates():
