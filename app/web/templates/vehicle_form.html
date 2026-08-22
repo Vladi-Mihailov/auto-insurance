@@ -51,7 +51,7 @@
       {% if not values.manufacturer_id and values.ocr_manufacturer_hint %}
       <span class="step__hint">Распознано: «{{ values.ocr_manufacturer_hint }}» — выберите производителя из списка.</span>
       {% endif %}
-      <span class="step__hint">Если производителя нет в списке, выберите «Other».</span>
+      <span class="step__hint">Если не удалось найти производителя — выберите „Other“.</span>
     </div>
 
     <div class="field">
@@ -71,7 +71,7 @@
       {% if not values.model_id and values.ocr_model_hint %}
       <span class="step__hint">Распознано: «{{ values.ocr_model_hint }}» — выберите модель из списка.</span>
       {% endif %}
-      <span class="step__hint">Если модели нет в списке, выберите «Other».</span>
+      <span class="step__hint">Если не удалось найти модель — выберите „Other“.</span>
     </div>
 
     <div class="step-nav">

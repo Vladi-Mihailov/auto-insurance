@@ -84,10 +84,14 @@ def test_sync_models_for_manufacturer_deactivates_missing_and_keeps_others(conn)
     )
     sync.sync_models_for_manufacturer(conn, manufacturer.id, [{"id": 1, "name": "X5"}])
 
+    # "Other" is synced in alongside the real models on every run (see
+    # test_sync_models_for_manufacturer_adds_other_when_tplge_omits_it) --
+    # its fixed external_id means it's never swept up by the deactivation
+    # this test is otherwise checking.
     active = {m.name for m in catalog_repo.list_models(conn, manufacturer.id)}
-    assert active == {"X5"}
+    assert active == {"X5", "Other"}
     all_models = {m.name for m in catalog_repo.list_models(conn, manufacturer.id, active_only=False)}
-    assert all_models == {"X5", "X6"}
+    assert all_models == {"X5", "X6", "Other"}
 
 
 def test_sync_models_for_manufacturer_marks_models_synced_at(conn):
@@ -98,11 +102,42 @@ def test_sync_models_for_manufacturer_marks_models_synced_at(conn):
     conn.commit()
     assert catalog_repo.get_manufacturer(conn, manufacturer_id).models_never_synced is True
 
-    sync.sync_models_for_manufacturer(conn, manufacturer_id, [])  # genuinely zero models
+    sync.sync_models_for_manufacturer(conn, manufacturer_id, [])  # tpl.ge returned genuinely zero real models
 
     manufacturer = catalog_repo.get_manufacturer(conn, manufacturer_id)
     assert manufacturer.models_never_synced is False
-    assert catalog_repo.list_models(conn, manufacturer_id) == []
+    # even zero real models still gets the synthetic "Other" fallback model
+    assert {m.name for m in catalog_repo.list_models(conn, manufacturer_id)} == {"Other"}
+
+
+def test_sync_models_for_manufacturer_adds_other_when_tplge_omits_it(conn):
+    """tpl.ge's own per-manufacturer model lists don't consistently include
+    an "Other" row (observed directly, e.g. real VOLKSWAGEN/SCHMITZ data) --
+    synced in locally so the "if you can't find your model, pick Other"
+    fallback always has something to land on."""
+    sync.sync_manufacturers(conn, [{"id": 158, "name": "VOLKSWAGEN", "isPopular": False}])
+    manufacturer = catalog_repo.list_manufacturers(conn)[0]
+
+    sync.sync_models_for_manufacturer(
+        conn, manufacturer.id, [{"id": 1, "name": "GOLF"}, {"id": 2, "name": "PASSAT"}]
+    )
+
+    names = {m.name for m in catalog_repo.list_models(conn, manufacturer.id)}
+    assert names == {"GOLF", "PASSAT", "Other"}
+
+
+def test_sync_models_for_manufacturer_does_not_duplicate_existing_other(conn):
+    """If tpl.ge already includes a real "Other" model for a manufacturer,
+    a second synthetic one must not be added alongside it."""
+    sync.sync_manufacturers(conn, [{"id": 3, "name": "ALFA ROMEO", "isPopular": False}])
+    manufacturer = catalog_repo.list_manufacturers(conn)[0]
+
+    sync.sync_models_for_manufacturer(
+        conn, manufacturer.id, [{"id": 1, "name": "GIULIA"}, {"id": 2, "name": "Other"}]
+    )
+
+    other_rows = [m for m in catalog_repo.list_models(conn, manufacturer.id) if m.name == "Other"]
+    assert len(other_rows) == 1
 
 
 def test_sync_models_on_demand_success(conn, monkeypatch):

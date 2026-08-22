@@ -231,5 +231,5 @@ def test_manufacturer_other_hint_matches_model_hint_style():
     _reach_policyholder(client_)  # already POSTed /vehicle once; GET re-renders it filled in
     response = client_.get("/vehicle")
     assert response.status_code == 200
-    assert "Если производителя нет в списке, выберите «Other»." in response.text
-    assert "Если модели нет в списке, выберите «Other»." in response.text
+    assert "Если не удалось найти производителя — выберите „Other“." in response.text
+    assert "Если не удалось найти модель — выберите „Other“." in response.text

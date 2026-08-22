@@ -56,6 +56,14 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY_SECONDS = 1.5
 _BATCH_RATE_LIMIT_SECONDS = 0.2
 
+# tpl.ge's own manufacturer list includes a real "Other" entry (external_id 1),
+# but its per-manufacturer model lists don't consistently include one (observed
+# directly, e.g. VOLKSWAGEN/SCHMITZ) -- synced in ourselves with a fixed,
+# obviously-not-a-real-tpl.ge-id external_id so the model picker's "if your
+# model isn't listed, pick Other" fallback always has something to land on,
+# and it survives being re-upserted on every future sync of that manufacturer.
+_OTHER_MODEL_EXTERNAL_ID = -1
+
 
 def _fetch_with_retry(fn, *args, **kwargs):
     delay = _RETRY_BASE_DELAY_SECONDS
@@ -108,12 +116,20 @@ def sync_manufacturers(conn: sqlite3.Connection, raw_manufacturers: list[dict]) 
 
 def sync_models_for_manufacturer(conn: sqlite3.Connection, manufacturer_id: int, raw_models: list[dict]) -> int:
     seen_external_ids = []
+    has_other = False
     for item in raw_models:
         name = item.get("name")
         if not name:
             continue
         catalog_repo.upsert_model(conn, external_id=item["id"], manufacturer_id=manufacturer_id, name=name)
         seen_external_ids.append(item["id"])
+        if name == "Other":
+            has_other = True
+    if not has_other:
+        catalog_repo.upsert_model(
+            conn, external_id=_OTHER_MODEL_EXTERNAL_ID, manufacturer_id=manufacturer_id, name="Other"
+        )
+        seen_external_ids.append(_OTHER_MODEL_EXTERNAL_ID)
     catalog_repo.deactivate_models_not_in(conn, manufacturer_id, seen_external_ids)
     catalog_repo.mark_models_synced(conn, manufacturer_id)
     conn.commit()
