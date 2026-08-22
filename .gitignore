@@ -2,6 +2,10 @@
 data/*.db
 data/*.db-*
 data/uploads/
+# Telethon session files (auto-insurance's own dedicated operator-notify
+# session -- see app/notifications/telegram.py) -- as sensitive as a
+# logged-in credential, never committed.
+data/sessions/
 __pycache__/
 *.pyc
 .pytest_cache/

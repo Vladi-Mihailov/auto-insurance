@@ -4,6 +4,10 @@
 <section class="step">
   <h1 class="step__title">Проверка оплат</h1>
 
+  {% if telegram_notify_failed %}
+  <p class="form__error">Оплата подтверждена, но уведомление оператору в Telegram не отправлено (Telegram недоступен). Проверьте логи сервера.</p>
+  {% endif %}
+
   {% if not rows %}
   <p class="step__text">Нет заказов, ожидающих проверки оплаты.</p>
   {% endif %}

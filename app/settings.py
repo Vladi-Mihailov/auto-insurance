@@ -77,6 +77,27 @@ class AdminSettings(BaseModel):
     password: str | None = None
 
 
+class TelegramOperatorSettings(BaseModel):
+    # Transport is Telethon (an authorized Telegram USER account), not the
+    # Bot API -- no bot is created. api_id/api_hash/phone are the SAME
+    # values already used by the separate ai-lead-radar project (same
+    # Telegram account) -- see app.notifications.telegram module docstring
+    # for why. session_path is auto-insurance's OWN dedicated .session
+    # file, which must never be ai-lead-radar's reader_live/reader_sync/
+    # reader_notifier/inviter sessions -- see
+    # app.notifications.authorize_telegram_operator for the one-time login
+    # that creates it. Credentials live ONLY in the environment, same rule
+    # as OcrSettings/AdminSettings above. Any of api_id/api_hash/phone/
+    # chat_id being None means the paid-order operator notification is
+    # skipped (logged, never blocks/reverts the payment confirmation it's
+    # reporting on) -- see app.notifications.telegram.
+    api_id: int | None = None
+    api_hash: str | None = None
+    phone: str | None = None
+    chat_id: int | str | None = None
+    session_path: Path = Path("data/sessions/auto_insurance_operator")
+
+
 class Settings(BaseModel):
     app: AppSettings
     pricing: PricingSettings
@@ -84,10 +105,25 @@ class Settings(BaseModel):
     contacts: ContactSettings = ContactSettings()
     ocr: OcrSettings = OcrSettings()
     admin: AdminSettings = AdminSettings()
+    telegram_operator: TelegramOperatorSettings = TelegramOperatorSettings()
 
 
 def _parse_bool(value: str | None) -> bool:
     return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_telegram_chat_id(value: str | None) -> int | str | None:
+    """Numeric chat/group ids (e.g. "-5535243432") become int -- Telethon
+    needs the real int id for a chat it hasn't necessarily seen a message
+    from recently. A "@username" (leading @ optional) is left as a string.
+    Same convention as ai-lead-radar's own settings.py::_normalize_chat_id."""
+    if not value:
+        return None
+    token = value.strip().lstrip("@")
+    try:
+        return int(token)
+    except ValueError:
+        return token
 
 
 def load_settings(project_root: Path) -> Settings:
@@ -146,5 +182,12 @@ def load_settings(project_root: Path) -> Settings:
         admin=AdminSettings(
             username=os.getenv("ADMIN_USERNAME") or None,
             password=os.getenv("ADMIN_PASSWORD") or None,
+        ),
+        telegram_operator=TelegramOperatorSettings(
+            api_id=int(os.getenv("TELEGRAM_API_ID")) if os.getenv("TELEGRAM_API_ID") else None,
+            api_hash=os.getenv("TELEGRAM_API_HASH") or None,
+            phone=os.getenv("TELEGRAM_PHONE") or None,
+            chat_id=_parse_telegram_chat_id(os.getenv("TELEGRAM_OPERATOR_CHAT_ID")),
+            session_path=project_root / os.getenv("TELEGRAM_OPERATOR_SESSION_PATH", "data/sessions/auto_insurance_operator"),
         ),
     )
