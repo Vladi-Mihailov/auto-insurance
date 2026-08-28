@@ -128,7 +128,12 @@ def format_paid_order_message(order: Order, *, category_name: str | None, period
     """Plain-text summary an operator needs to manually issue the policy —
     every field here is read from the existing Order/catalog data, nothing
     invented. Optional fields that are empty are simply omitted (never
-    rendered as "Label: None" or "Label: ")."""
+    rendered as "Label: None" or "Label: "). engine_power/model_year/
+    date_of_birth are the AM/TR-only Step 4 fields (see
+    app.web.checkout_routes._requires_engine_power/_requires_model_year/
+    _requires_date_of_birth) -- always None for GE, so those three lines
+    simply never appear for a GE order; no country check needed here,
+    same value-based _lines() omission every other optional field uses."""
     country_name = _COUNTRY_NAMES.get(order.country_code, order.country_code)
     amount = None
     if order.price_customer_minor is not None:
@@ -137,13 +142,28 @@ def format_paid_order_message(order: Order, *, category_name: str | None, period
     if order.start_date and order.end_date:
         dates = f"{order.start_date.strftime('%d.%m.%Y')} — {order.end_date.strftime('%d.%m.%Y')}"
 
+    # EXACT DATE RANGE product (AM's passenger_car) has no period_code/label
+    # at all by design (see app.pricing.provider.get_duration_range) -- the
+    # only caller (app.web.admin_routes.post_admin_confirm_payment) passes
+    # period_label=None in that case, since there's no period to resolve a
+    # label for. Never leave "Период" simply missing when we can still say
+    # something useful: derive "N дней" from the dates themselves, same
+    # "end - start" duration definition used everywhere else this rollout
+    # (see app.web.checkout_routes._parse_duration_range_dates and
+    # app.web.routes.get_summary's identical fallback for the customer-
+    # facing Summary screen). Never a fake period code -- just a label.
+    effective_period_label = period_label
+    if not effective_period_label and order.period_code is None and order.start_date and order.end_date:
+        duration_days = (order.end_date - order.start_date).days
+        effective_period_label = f"{duration_days} дней"
+
     sections = [
         "\n".join(["💰 ОПЛАЧЕННЫЙ ЗАКАЗ", order.public_number]),
         "\n".join(
             _lines(
                 ("Страна", country_name),
                 ("Категория", category_name),
-                ("Период", period_label),
+                ("Период", effective_period_label),
                 ("Даты", dates),
                 ("Сумма", amount),
             )
@@ -155,6 +175,8 @@ def format_paid_order_message(order: Order, *, category_name: str | None, period
                 ("Модель", order.vehicle_model),
                 ("Госномер", order.display_registration_number),
                 ("VIN / номер шасси", order.display_identifier),
+                ("Мощность двигателя", f"{order.engine_power} л.с." if order.engine_power else None),
+                ("Год выпуска", order.model_year),
             )
         ),
         "\n".join(
@@ -163,6 +185,7 @@ def format_paid_order_message(order: Order, *, category_name: str | None, period
                 ("ФИО", order.full_name),
                 ("Идентификационный номер", order.identification_number),
                 ("Гражданство", order.citizenship),
+                ("Дата рождения", order.date_of_birth.strftime("%d.%m.%Y") if order.date_of_birth else None),
             )
         ),
         "\n".join(["📞 КОНТАКТЫ", ""] + [f"{label}: {value}" for label, value in order.contact_rows]),

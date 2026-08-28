@@ -407,6 +407,106 @@ def test_message_omits_empty_optional_contacts_rather_than_showing_none():
     text = format_paid_order_message(order, category_name="Легковой", period_label="15 дней")
 
     assert "None" not in text
+
+
+# --------------------- Step 6: country-specific fields (AM/TR) -------------------
+
+
+def test_message_ge_does_not_show_engine_power_model_year_or_dob():
+    """GE order: engine_power/model_year/date_of_birth are all None by
+    default (see _make_order) -- the three new lines must simply never
+    appear, and the rest of the existing GE message stays exactly as it
+    was (see test_message_contains_core_vehicle_and_policyholder_fields)."""
+    order = _make_order()
+    text = format_paid_order_message(order, category_name="Легковой", period_label="15 дней")
+
+    assert "Мощность двигателя" not in text
+    assert "Год выпуска" not in text
+    assert "Дата рождения" not in text
+    assert "1 349" in text  # amount still present, untouched
+    assert "None" not in text
+
+
+def test_message_am_period_code_none_derives_duration_from_dates_and_shows_engine_power():
+    """AM's passenger_car has no period_code by design (see
+    app.pricing.provider.get_duration_range) -- admin_routes passes
+    period_label=None for it since there's no period to resolve a label
+    for. The formatter must derive "N дней" from start_date/end_date
+    itself rather than ever rendering "Период: None" or inventing a fake
+    period code."""
+    order = _make_order(
+        country_code="AM",
+        period_code=None,
+        start_date=date(2026, 10, 27),
+        end_date=date(2026, 11, 6),  # exactly 10 days
+        engine_power=180,
+        model_year=None,
+        date_of_birth=None,
+    )
+    text = format_paid_order_message(order, category_name="Легковой", period_label=None)
+
+    assert "Период: 10 дней" in text
+    assert "27.10.2026" in text and "06.11.2026" in text
+    assert "Мощность двигателя: 180 л.с." in text
+    assert "Год выпуска" not in text  # AM never has model_year
+    assert "Дата рождения" not in text  # AM never has date_of_birth
+    assert "None" not in text
+
+
+def test_message_am_missing_engine_power_does_not_crash_and_is_omitted():
+    """Missing optional country-specific fields must never crash the
+    formatter -- they're simply omitted, same as any other optional field."""
+    order = _make_order(
+        country_code="AM",
+        period_code=None,
+        start_date=date(2026, 10, 27),
+        end_date=date(2026, 11, 6),
+        engine_power=None,
+        model_year=None,
+        date_of_birth=None,
+    )
+    text = format_paid_order_message(order, category_name="Легковой", period_label=None)
+
+    assert "Мощность двигателя" not in text
+    assert "Период: 10 дней" in text  # rest of the message still renders fine
+    assert "None" not in text
+
+
+def test_message_tr_shows_engine_power_model_year_and_date_of_birth():
+    """TR has a real, fixed period_code -- the formatter must use the
+    label already resolved upstream (see app.web.admin_routes) rather than
+    deriving one, and must show all three Step 4 fields Turkey requires."""
+    order = _make_order(
+        country_code="TR",
+        period_code="30d",
+        engine_power=150,
+        model_year=2020,
+        date_of_birth=date(1990, 5, 20),
+    )
+    text = format_paid_order_message(order, category_name="Легковой", period_label="30 дней")
+
+    assert "Период: 30 дней" in text
+    assert "Мощность двигателя: 150 л.с." in text
+    assert "Год выпуска: 2020" in text
+    assert "Дата рождения: 20.05.1990" in text  # dd.mm.yyyy, same convention as "Даты"
+    assert "1 349" in text  # amount still rendered
+    assert "None" not in text
+
+
+def test_message_tr_missing_date_of_birth_does_not_crash_and_is_omitted():
+    order = _make_order(
+        country_code="TR",
+        period_code="30d",
+        engine_power=150,
+        model_year=2020,
+        date_of_birth=None,
+    )
+    text = format_paid_order_message(order, category_name="Легковой", period_label="30 дней")
+
+    assert "Дата рождения" not in text
+    assert "Мощность двигателя: 150 л.с." in text  # sibling fields unaffected
+    assert "Год выпуска: 2020" in text
+    assert "None" not in text
     assert "Email: ivan@example.com" in text
     assert "Телефон:" not in text
     assert "MAX:" not in text
