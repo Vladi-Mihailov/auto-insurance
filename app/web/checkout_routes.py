@@ -114,6 +114,33 @@ def _requires_date_of_birth(country_code: str) -> bool:
     return country_code == "TR"
 
 
+# OCR-autofill guards for the three new fields (Step 5) -- an OCR-read value
+# goes through the EXACT SAME server-side validators manual entry uses (see
+# app.validation), never a separate/looser check. An implausible OCR read
+# (0 hp, model_year 3026, a future date_of_birth) is silently dropped here
+# rather than autofilled -- the field just stays empty for the user to type
+# by hand, same as any other unrecognized field; OCR never blocks on this.
+def _ocr_engine_power_or_none(raw: int | None) -> int | None:
+    if raw is None:
+        return None
+    value, error = validate_engine_power(str(raw))
+    return None if error else value
+
+
+def _ocr_model_year_or_none(raw: int | None) -> int | None:
+    if raw is None:
+        return None
+    value, error = validate_model_year(str(raw), current_year=today_in_georgia().year)
+    return None if error else value
+
+
+def _ocr_date_of_birth_or_none(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    value, error = validate_date_of_birth(raw, today=today_in_georgia())
+    return None if error else value.isoformat()
+
+
 def _duration_range(settings, country_code: str, category_code: str) -> DurationRange | None:
     """None means (country, category) is a FIXED-period product (GE/TR
     today) -- non-None means EXACT DATE RANGE (AM's passenger_car) where the
@@ -810,6 +837,19 @@ def post_documents_upload(
             "ocr_citizenship": match_citizenship_text(ocr_result.citizenship),
             "ocr_driver_full_name": ocr_result.driver_full_name,
             "ocr_owner_full_name": ocr_result.owner_full_name,
+            # engine_power/model_year are vehicle-document fields, written
+            # directly into their real draft keys -- same as
+            # registration_number/manufacturer_id above -- since /vehicle
+            # (the very next screen) reads them straight from the draft,
+            # with no separate review-hint indirection needed (there's no
+            # fuzzy catalog match involved for a plain number the way there
+            # is for manufacturer/model text). date_of_birth is a
+            # policyholder-document field and follows the ocr_* hint
+            # pattern instead, exactly like ocr_policyholder_full_name
+            # above (see get_policyholder's initial-autofill-only read).
+            "engine_power": _ocr_engine_power_or_none(ocr_result.engine_power),
+            "model_year": _ocr_model_year_or_none(ocr_result.model_year),
+            "ocr_date_of_birth": _ocr_date_of_birth_or_none(ocr_result.date_of_birth),
         },
     )
     return _redirect("/vehicle")
@@ -1202,6 +1242,7 @@ def get_policyholder(
             back_url="/vehicle",
             submit_label="Продолжить",
             country_code=_draft_country_code(draft),
+            date_of_birth=draft.get("ocr_date_of_birth") or "",
         ),
     )
 

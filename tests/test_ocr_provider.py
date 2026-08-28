@@ -158,6 +158,9 @@ def test_openai_provider_parses_structured_response_into_ocr_result(monkeypatch)
         owner_full_name=None,
         passport_number=" AB1234567 ",
         citizenship="Georgia",
+        engine_power=150,
+        model_year=2020,
+        date_of_birth=" 1990-05-20 ",  # provider._clean must trim this too
     )
     fake_response = types.SimpleNamespace(output_parsed=parsed)
     monkeypatch.setattr(provider._client.responses, "parse", lambda **kwargs: fake_response)
@@ -174,6 +177,9 @@ def test_openai_provider_parses_structured_response_into_ocr_result(monkeypatch)
     assert result.owner_full_name is None
     assert result.passport_number == "AB1234567"
     assert result.citizenship == "Georgia"
+    assert result.engine_power == 150
+    assert result.model_year == 2020
+    assert result.date_of_birth == "1990-05-20"
 
 
 def test_recognize_sends_every_image_in_one_request_never_one_call_per_image(monkeypatch):
@@ -191,6 +197,7 @@ def test_recognize_sends_every_image_in_one_request_never_one_call_per_image(mon
             registration_number="AB123CD", vin=None, chassis_number=None, manufacturer=None, model=None,
             policyholder_full_name=None, driver_full_name=None, owner_full_name=None,
             passport_number=None, citizenship=None,
+            engine_power=None, model_year=None, date_of_birth=None,
         )
         return types.SimpleNamespace(output_parsed=parsed)
 
@@ -252,6 +259,7 @@ def test_openai_provider_retries_once_on_rate_limit_then_succeeds(monkeypatch):
             registration_number="AB123CD", vin=None, chassis_number=None, manufacturer=None, model=None,
             policyholder_full_name=None, driver_full_name=None, owner_full_name=None,
             passport_number=None, citizenship=None,
+            engine_power=None, model_year=None, date_of_birth=None,
         )
         return types.SimpleNamespace(output_parsed=parsed)
 
@@ -307,6 +315,7 @@ def test_openai_provider_retries_once_on_5xx_then_succeeds(monkeypatch):
             registration_number=None, vin=None, chassis_number=None, manufacturer=None, model=None,
             policyholder_full_name=None, driver_full_name=None, owner_full_name=None,
             passport_number=None, citizenship=None,
+            engine_power=None, model_year=None, date_of_birth=None,
         )
         return types.SimpleNamespace(output_parsed=parsed)
 
@@ -558,11 +567,40 @@ def test_prompt_still_forbids_guessing_missing_values():
 
 
 def test_prompt_still_forbids_extracting_unrequested_personal_data():
-    """Regression: the three name fields + passport_number/citizenship ARE
-    requested (see the field-list tests below) -- but nothing beyond
-    those, e.g. address/date of birth, should ever be extracted."""
-    assert "Не извлекай адрес, дату" in _SYSTEM_PROMPT
+    """Regression: the three name fields + passport_number/citizenship/
+    engine_power/model_year/date_of_birth ARE requested (see the field-list
+    tests below and the Step 5 engine_power/model_year/date_of_birth tests)
+    -- but nothing beyond those, e.g. address/marital status/Bonus-Malus/
+    customs data, should ever be extracted."""
+    assert "Не извлекай адрес, семейное" in _SYSTEM_PROMPT
     assert "эти данные не запрашиваются" in _SYSTEM_PROMPT
+
+
+def test_prompt_requests_engine_power_model_year_and_date_of_birth():
+    assert "engine_power" in _SYSTEM_PROMPT
+    assert "model_year" in _SYSTEM_PROMPT
+    assert "date_of_birth" in _SYSTEM_PROMPT
+
+
+def test_prompt_restricts_engine_power_to_explicit_hp_never_kw_conversion():
+    assert "НЕ пересчитывай кВт в л.с. самостоятельно" in _SYSTEM_PROMPT
+
+
+def test_prompt_forbids_confusing_engine_power_with_displacement():
+    assert "НЕ путай engine_power с рабочим объёмом двигателя" in _SYSTEM_PROMPT
+
+
+def test_prompt_forbids_substituting_registration_year_or_document_issue_date_for_model_year():
+    assert "НЕ подставляй год первой регистрации" in _SYSTEM_PROMPT
+
+
+def test_prompt_restricts_date_of_birth_to_the_same_passport_as_passport_number():
+    assert "date_of_birth — дата рождения СТРАХОВАТЕЛЯ, ТОЛЬКО из ТОГО ЖЕ" in _SYSTEM_PROMPT
+    assert "НИКОГДА не из водительского удостоверения и" in _SYSTEM_PROMPT
+
+
+def test_prompt_forbids_confusing_dob_with_issue_or_expiry_date():
+    assert "НЕ путай дату рождения с датой выдачи документа или датой окончания" in _SYSTEM_PROMPT
 
 
 def test_prompt_requests_the_three_name_fields_and_their_sources():
