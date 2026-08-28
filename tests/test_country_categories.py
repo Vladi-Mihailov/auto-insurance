@@ -130,15 +130,13 @@ def test_tr_category_period_screen_only_shows_passenger_car(real_config):
 
 
 def test_tr_passenger_car_clears_the_category_check(real_config):
-    """passenger_car is enabled for TR -- and, as of Step 3, TR has real
-    (if still unpriced) periods configured (see config.yaml's
-    pricing.TR.passenger_car), so a valid category+period now fails on the
-    PRICE check specifically, never the category check -- a more precise
-    assertion than Step 2's own version of this test, written before TR
-    had any periods configured at all."""
+    """passenger_car is enabled for TR -- 45d has no confirmed price yet
+    (see config.yaml's pricing.TR.passenger_car -- only 30d is priced as
+    of the first confirmed TR price), so a valid category+period still
+    fails on the PRICE check specifically, never the category check."""
     client = TestClient(app)
     _start(client, "TR")
-    response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
+    response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": "45d"})
     assert response.status_code == 422
     assert "Цена для этого периода пока не настроена" in response.text
     assert "Выберите категорию транспорта" not in response.text
@@ -179,23 +177,26 @@ def test_am_api_periods_is_empty_not_500_and_not_ge_prices(real_config):
     assert response.json() == []
 
 
-def test_tr_api_periods_lists_the_five_tr_periods_all_unpriced_not_ge_prices(real_config):
-    """As of Step 3, TR's passenger_car has real period AVAILABILITY (30/45/
-    90/180/365 days) but deliberately no PRICE yet -- see config.yaml's
-    pricing.TR.passenger_car and the gap-analysis report's PERIOD
-    AVAILABILITY vs PRICE AVAILABILITY split. Supersedes Step 2's "empty
-    list" version of this test (written before TR had any periods
-    configured at all): the safety property that actually matters --
-    never Georgia's real prices -- is asserted directly on every period."""
+def test_tr_api_periods_lists_the_five_tr_periods_only_30d_priced_not_ge_prices(real_config):
+    """TR's passenger_car has real period AVAILABILITY (30/45/90/180/365
+    days) -- see config.yaml's pricing.TR.passenger_car. 30d now has its
+    first confirmed business price (2299 RUB, confirmed 2026-08-29);
+    45d/90d/180d/365d remain deliberately unpriced (null) until business
+    confirms them -- the safety property that actually matters -- never
+    Georgia's real prices -- is asserted directly on every period."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     assert response.status_code == 200
-    periods = response.json()
-    assert [p["code"] for p in periods] == ["30d", "45d", "90d", "180d", "365d"]
-    for period in periods:
-        assert period["is_priced"] is False
-        assert period["price_rub"] is None
+    periods = {p["code"]: p for p in response.json()}
+    assert list(periods) == ["30d", "45d", "90d", "180d", "365d"]
+
+    assert periods["30d"]["is_priced"] is True
+    assert periods["30d"]["price_rub"] == 2299
+
+    for code in ("45d", "90d", "180d", "365d"):
+        assert periods[code]["is_priced"] is False
+        assert periods[code]["price_rub"] is None
 
 
 def test_am_category_period_get_screen_renders_without_error_and_shows_no_priced_period(real_config):

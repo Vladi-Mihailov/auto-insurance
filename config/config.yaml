@@ -120,23 +120,24 @@ pricing:
 
   # Turkey: FIXED-PERIOD product (unlike Armenia's exact-date-range one
   # below), same shape as Georgia's own pricing lists -- see
-  # app.dates.rules.FixedDurationDateRule for the date math. price_rub is
-  # deliberately null for every period here: this step (GE/AM/TR period+date
-  # model) is NOT the step that prices Turkey -- see the gap-analysis
-  # report's PricingProvider design. A null price already means "period
-  # exists, not selectable yet" throughout this codebase (see
-  # PeriodOption.is_priced) -- this is the SAME existing mechanism Georgia's
-  # own periods used before business confirmed real RUB numbers, not a new
-  # one invented for Turkey. Only passenger_car is populated (Step 2 limits
-  # TR to passenger_car); the periods_by_country_category structure is
-  # already keyed by category, so adding motorcycle/trailer/truck/etc. later
-  # needs no code change, just more entries here once their period sets are
+  # app.dates.rules.FixedDurationDateRule for the date math. A null price
+  # means "period exists, not selectable yet" throughout this codebase (see
+  # PeriodOption.is_priced) -- the SAME existing mechanism Georgia's own
+  # periods used before business confirmed real RUB numbers, not a new one
+  # invented for Turkey. Only passenger_car is populated (Step 2 limits TR
+  # to passenger_car); the periods_by_country_category structure is already
+  # keyed by category, so adding motorcycle/trailer/truck/etc. later needs
+  # no code change, just more entries here once their period sets are
   # confirmed (they are NOT assumed to be the same 5 periods).
+  #
+  # 30d RUB price confirmed by business on 2026-08-29 -- first real TR
+  # price. 45d/90d/180d/365d remain intentionally unpriced (null) until
+  # business confirms them; do not guess/interpolate a number for them.
   TR:
     passenger_car:
       - code: "30d"
         label: "30 дней"
-        price_rub: null
+        price_rub: 2299
       - code: "45d"
         label: "45 дней"
         price_rub: null

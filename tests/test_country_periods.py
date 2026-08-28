@@ -432,3 +432,103 @@ def test_summary_shows_duration_in_days_for_a_period_code_none_am_order():
     assert response.status_code == 200
     assert "10 дней" in response.text
     assert "None" not in response.text  # period_label must never render as the literal string "None"
+
+
+# ---------------------------------------------------------------------------
+# TR passenger_car 30d: first confirmed business price (2299 RUB, confirmed
+# 2026-08-29). 45d/90d/180d/365d remain deliberately unpriced -- see
+# config.yaml's pricing.TR.passenger_car.
+# ---------------------------------------------------------------------------
+
+
+def test_tr_30d_is_now_priced_and_selectable(real_config):
+    client = TestClient(app)
+    _start(client, "TR")
+    response = client.get("/api/periods", params={"category_code": "passenger_car"})
+    periods = {p["code"]: p for p in response.json()}
+    assert periods["30d"]["is_priced"] is True
+    assert periods["30d"]["price_rub"] == 2299
+
+
+def test_tr_45_90_180_365_remain_unpriced_and_unselectable(real_config):
+    client = TestClient(app)
+    _start(client, "TR")
+    for code in ("45d", "90d", "180d", "365d"):
+        response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": code})
+        assert response.status_code == 422, code
+        assert "Цена для этого периода пока не настроена" in response.text, code
+
+
+def test_tr_30d_category_period_submission_now_succeeds(real_config):
+    client = TestClient(app)
+    _start(client, "TR")
+    response = client.post(
+        "/category-period", data={"category_code": "passenger_car", "period_code": "30d"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/date"
+    draft = _read_draft(client)
+    assert draft["period_code"] == "30d"
+    assert draft["price_customer_minor"] == 229900  # 2299 RUB in kopecks
+
+
+def test_tr_30d_price_flows_through_draft_order_summary_and_payment(real_config):
+    """Full round-trip: draft -> create_order -> Order -> summary -> payment,
+    using TR's now-real 30d price. TR requires engine_power/model_year
+    (vehicle) and date_of_birth (policyholder) as of Step 4 -- supplied
+    here so the flow actually reaches order creation."""
+    from app.orders.repository import get_order_by_token
+    from policyholder_helpers import valid_policyholder_data
+
+    client = TestClient(app)
+    _start(client, "TR")
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
+    client.post("/date", data={"start_date": _iso(0)}, follow_redirects=False)
+    client.post("/method", data={"choice": "manual"})
+    client.post(
+        "/vehicle",
+        data={
+            "registration_number": "TR299AA",
+            "identifier_type": "vin",
+            "identifier": "JT123456789012345",
+            "manufacturer_id": str(_manufacturer_id),
+            "model_id": str(_model_id),
+            "engine_power": "150",
+            "model_year": "2020",
+        },
+    )
+    response = client.post(
+        "/policyholder",
+        data=valid_policyholder_data(contact_telegram="@tr_30d_price", date_of_birth="1990-05-20"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    resume_token = response.headers["location"].split("/")[2]
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        order = get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+    assert order.country_code == "TR"
+    assert order.period_code == "30d"
+    assert order.price_customer_minor == 229900
+
+    summary = client.get(f"/o/{resume_token}/summary")
+    assert summary.status_code == 200
+    assert "2 299" in summary.text
+    assert "30 дней" in summary.text
+
+    client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
+    payment = client.get(f"/o/{resume_token}/payment")
+    assert payment.status_code == 200
+    assert "2 299" in payment.text
+
+
+def test_ge_pricing_unaffected_by_tr_30d_price(real_config):
+    """Regression guard: adding TR's first real price must not touch GE's
+    own real production prices (confirmed 2026-08-13)."""
+    client = TestClient(app)
+    response = client.get("/api/periods", params={"category_code": "passenger_car"})
+    periods = {p["code"]: p["price_rub"] for p in response.json()}
+    assert periods == {"15d": 1349, "30d": 2149, "90d": 3649}
