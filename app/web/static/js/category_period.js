@@ -1,11 +1,44 @@
 document.addEventListener("DOMContentLoaded", function () {
   var form = document.getElementById("category-period-form");
-  if (!form || !window.INSURANCE_PERIODS_URL) return;
+  if (!form) return;
 
   var CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
 
   var categoryButtons = form.querySelectorAll(".choice-card--category");
   var categoryInput = document.getElementById("category_code");
+
+  function markCategorySelected(button) {
+    categoryButtons.forEach(function (b) {
+      b.classList.remove("is-selected");
+      var existingCheck = b.querySelector(".choice-card__check");
+      if (existingCheck) existingCheck.remove();
+    });
+    button.classList.add("is-selected");
+    var check = document.createElement("span");
+    check.className = "choice-card__check";
+    check.innerHTML = CHECK_ICON;
+    button.prepend(check);
+  }
+
+  if (window.INSURANCE_DURATION_RANGE_MODE) {
+    // EXACT DATE RANGE product (AM): no period picker on this screen at all
+    // (see category_period.html) -- Next just needs a category chosen, and
+    // the enabled category already comes pre-selected as the draft default
+    // (see get_category_period), so there's nothing further to gate here.
+    var nextBtnRangeMode = document.getElementById("cp-next-btn");
+    categoryButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        if (button.classList.contains("is-selected")) return;
+        markCategorySelected(button);
+        categoryInput.value = button.getAttribute("data-category-code");
+      });
+    });
+    if (nextBtnRangeMode) nextBtnRangeMode.disabled = false;
+    return;
+  }
+
+  if (!window.INSURANCE_PERIODS_URL) return;
+
   var periodInput = document.getElementById("period_code");
   var periodGrid = document.getElementById("period-grid");
   var nextBtn = document.getElementById("cp-next-btn");
@@ -19,19 +52,6 @@ document.addEventListener("DOMContentLoaded", function () {
   function updateNextEnabled() {
     var period = currentPeriods.filter(function (p) { return p.code === periodInput.value; })[0];
     nextBtn.disabled = !(categoryInput.value && period && period.is_priced);
-  }
-
-  function markCategorySelected(button) {
-    categoryButtons.forEach(function (b) {
-      b.classList.remove("is-selected");
-      var existingCheck = b.querySelector(".choice-card__check");
-      if (existingCheck) existingCheck.remove();
-    });
-    button.classList.add("is-selected");
-    var check = document.createElement("span");
-    check.className = "choice-card__check";
-    check.innerHTML = CHECK_ICON;
-    button.prepend(check);
   }
 
   function selectPeriod(code) {

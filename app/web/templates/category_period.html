@@ -31,6 +31,16 @@
 
     <h2 class="step__title step__title--sm">Срок страхования</h2>
     {% if error %}<p class="form__error">{{ error }}</p>{% endif %}
+    {% if duration_range %}
+    <!-- EXACT DATE RANGE product (AM passenger_car): no fixed period list
+         at all -- start_date/end_date are chosen on the next step (see
+         date_step.html's own duration_range branch). -->
+    <p class="step__text">
+      Срок страхования (от {{ duration_range.min_days }} до {{ duration_range.max_days }} дней) —
+      на следующем шаге, вместе с датами.
+    </p>
+    <input type="hidden" name="period_code" id="period_code" value="">
+    {% else %}
     <div class="choice-grid choice-grid--periods" id="period-grid">
       {% for period in periods %}
       <button type="button" data-period-code="{{ period.code }}"
@@ -48,10 +58,11 @@
       {% endfor %}
     </div>
     <input type="hidden" name="period_code" id="period_code" value="{{ selected_period or '' }}">
+    {% endif %}
 
     <div class="step-nav">
       <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
-      <button type="submit" class="btn btn--primary btn--lg" id="cp-next-btn" disabled>{{ submit_label }}</button>
+      <button type="submit" class="btn btn--primary btn--lg" id="cp-next-btn" {% if not duration_range %}disabled{% endif %}>{{ submit_label }}</button>
     </div>
   </form>
 </section>
@@ -60,6 +71,7 @@
 {% block scripts %}
 <script>
   window.INSURANCE_PERIODS_URL = "/api/periods";
+  window.INSURANCE_DURATION_RANGE_MODE = {{ "true" if duration_range else "false" }};
 </script>
 <script src="/static/js/category_period.js"></script>
 {% endblock %}

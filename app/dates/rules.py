@@ -93,3 +93,27 @@ class GeorgiaDateRule(DateRule):
             return _add_calendar_months(start_date, self._MONTH_PERIODS[period_code])
 
         raise UnknownPeriodCode(f"Unknown period_code: {period_code!r}")
+
+
+class FixedDurationDateRule(DateRule):
+    """Same "plain add the period, no +-1 adjustment" semantics as
+    GeorgiaDateRule (see that class and the module docstring for the
+    tpl.ge-observed evidence this mirrors) — parameterized by which period
+    codes exist so a second fixed-period country (Turkey: 30d/45d/90d/180d/
+    365d, all day-based, no month-based period like GE's legacy 1y) doesn't
+    need its own hand-duplicated class. GeorgiaDateRule itself is left
+    completely untouched by this addition — its own byte-for-byte behaviour
+    and tests are not this class's concern."""
+
+    def __init__(self, *, day_periods: dict[str, int] | None = None, month_periods: dict[str, int] | None = None):
+        self._day_periods = dict(day_periods or {})
+        self._month_periods = dict(month_periods or {})
+
+    def compute_end_date(self, start_date: date, period_code: str) -> date:
+        if period_code in self._day_periods:
+            return start_date + timedelta(days=self._day_periods[period_code])
+
+        if period_code in self._month_periods:
+            return _add_calendar_months(start_date, self._month_periods[period_code])
+
+        raise UnknownPeriodCode(f"Unknown period_code: {period_code!r}")

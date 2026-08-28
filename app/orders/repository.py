@@ -23,7 +23,12 @@ def create_order(
     session_id: str,
     country_code: str,
     vehicle_category_code: str,
-    period_code: str,
+    # None for an EXACT DATE RANGE product (currently AM's passenger_car,
+    # see app.pricing.provider.get_duration_range) -- the column itself has
+    # always been nullable (see app.db.SCHEMA), this just makes the type
+    # hint honest about a call shape app.web.checkout_routes.post_policyholder
+    # now actually uses.
+    period_code: str | None,
     start_date: date,
     end_date: date,
     price_customer_minor: int,

@@ -12,11 +12,25 @@
              value="{{ start_date.isoformat() if start_date else '' }}" min="{{ min_date }}" required>
     </label>
 
+    {% if duration_range %}
+    <!-- EXACT DATE RANGE product (AM passenger_car): both dates are direct
+         user input -- there's no fixed period to compute end_date from. -->
+    <label class="field">
+      <span class="field__label">Окончание страхования</span>
+      <input type="date" name="end_date" id="end_date"
+             value="{{ end_date.isoformat() if end_date else '' }}" min="{{ min_date }}" required>
+      <span class="step__hint">Срок страхования — от {{ duration_range.min_days }} до {{ duration_range.max_days }} дней.</span>
+    </label>
+    {% if duration_days %}
+    <p class="step__text">Срок: {{ duration_days }} дней</p>
+    {% endif %}
+    {% else %}
     <div class="field">
       <span class="field__label">Окончание страхования</span>
       <div class="field--readonly {% if not end_date %}is-empty{% endif %}" id="end-date-display">{% if end_date %}{{ end_date.strftime('%d.%m.%Y') }}{% else %}Рассчитается автоматически{% endif %}</div>
       <span class="step__hint">Дата окончания рассчитывается по выбранному сроку страхования и не редактируется вручную.</span>
     </div>
+    {% endif %}
 
     <div class="step-nav">
       <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
@@ -27,7 +41,9 @@
 {% endblock %}
 
 {% block scripts %}
+{% if not duration_range %}
 <script>
   window.INSURANCE_DATE_PREVIEW_URL = "{{ date_preview_url }}";
 </script>
+{% endif %}
 {% endblock %}

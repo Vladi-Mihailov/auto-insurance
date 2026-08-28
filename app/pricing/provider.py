@@ -38,3 +38,23 @@ def get_period(settings: Settings, country_code: str, category_code: str, period
         if period.code == period_code:
             return period
     return None
+
+
+@dataclass(frozen=True)
+class DurationRange:
+    min_days: int
+    max_days: int
+
+
+def get_duration_range(settings: Settings, country_code: str, category_code: str) -> DurationRange | None:
+    """None means this (country, category) is a FIXED-period product (or
+    simply not configured at all) -- see available_periods/get_period for
+    that case. Non-None means the opposite: an EXACT DATE RANGE product
+    (currently only AM passenger_car) where the customer picks start_date/
+    end_date directly rather than choosing a period code -- see
+    app.web.checkout_routes._parse_duration_range_dates, the only place
+    that validates against these bounds."""
+    config = settings.pricing.duration_ranges_by_country_category.get(country_code, {}).get(category_code)
+    if config is None:
+        return None
+    return DurationRange(min_days=config.min_days, max_days=config.max_days)

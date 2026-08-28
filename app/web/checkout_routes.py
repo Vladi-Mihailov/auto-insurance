@@ -18,14 +18,14 @@ from app.analytics.repository import log_event
 from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
 from app.countries import COUNTRIES, match_citizenship_text
-from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode, today_in_georgia
+from app.dates.rules import DateRule, FixedDurationDateRule, GeorgiaDateRule, UnknownPeriodCode, today_in_georgia
 from app.deps import get_db, get_ocr_provider, get_order_or_404, get_session_id, get_settings
 from app.ocr.image import MAX_FILES_PER_RECOGNITION, UploadValidationError, validate_and_normalize_upload
 from app.ocr.parser import build_candidates
 from app.ocr.provider import OcrProvider, OcrProviderError
 from app.orders.models import Order
 from app.orders.repository import create_order, set_dates, update_coverage, update_policyholder, update_vehicle_fields
-from app.pricing.provider import available_periods, get_period
+from app.pricing.provider import DurationRange, available_periods, get_duration_range, get_period
 from app.sessions.repository import clear_draft, get_draft, merge_draft
 from app.validation import (
     validate_citizenship,
@@ -45,14 +45,26 @@ DATE_RULE = GeorgiaDateRule()
 
 # The only checkout-level notion of "which countries exist" right now (step 1
 # of the multi-country rollout -- see the GE/AM/TR gap-analysis report this
-# implements). AM/TR are accepted here so country_code survives the draft ->
-# Order round-trip, but nothing else in this module is country-aware yet:
-# pricing/periods/dates/vehicle fields are still 100% Georgia-shaped (see
-# app.pricing.provider, app.dates.rules) -- an AM/TR draft simply finds no
-# priced periods anywhere and cannot proceed past /category-period. That's
-# deliberate for this step, not a bug.
+# implements). Georgia is FIXED-period (DATE_RULE above); Turkey is also
+# fixed-period but with its own period set/prices-not-yet-set (see
+# _FIXED_DURATION_DATE_RULES/config.yaml's pricing.TR); Armenia is EXACT
+# DATE RANGE (see _duration_range/_parse_duration_range_dates) -- neither
+# AM nor TR has a real customer price yet (out of scope for this step, see
+# the gap-analysis report's PricingProvider design), so neither can reach
+# order creation through the real UI flow today. That's deliberate, not a
+# bug -- see post_policyholder's price guard below.
 SUPPORTED_COUNTRY_CODES = ("GE", "AM", "TR")
 DEFAULT_COUNTRY_CODE = "GE"
+
+# FIXED-period date rule per country -- GE's own untouched GeorgiaDateRule,
+# plus Turkey's own period set via the generic FixedDurationDateRule (see
+# app.dates.rules). A country absent here (Armenia) is never fixed-period at
+# all right now -- callers must check _duration_range first (see
+# _fixed_duration_date_rule's own docstring).
+_FIXED_DURATION_DATE_RULES: dict[str, DateRule] = {
+    "GE": DATE_RULE,
+    "TR": FixedDurationDateRule(day_periods={"30d": 30, "45d": 45, "90d": 90, "180d": 180, "365d": 365}),
+}
 
 
 def _redirect(path: str) -> RedirectResponse:
@@ -81,6 +93,73 @@ def _allowed_category_codes(settings, country_code: str) -> list[str] | None:
     change; AM/TR are explicitly narrowed there instead of here, so enabling
     more categories later is a config edit, never a code change."""
     return settings.catalog.enabled_category_codes_by_country.get(country_code)
+
+
+def _duration_range(settings, country_code: str, category_code: str) -> DurationRange | None:
+    """None means (country, category) is a FIXED-period product (GE/TR
+    today) -- non-None means EXACT DATE RANGE (AM's passenger_car) where the
+    customer picks start_date/end_date directly instead of a period code.
+    Thin pass-through to app.pricing.provider.get_duration_range, kept as
+    its own helper so every caller in this module goes through the exact
+    same check rather than reaching into settings.pricing directly."""
+    return get_duration_range(settings, country_code, category_code)
+
+
+def _fixed_duration_date_rule(country_code: str) -> DateRule:
+    """Only ever called after confirming _duration_range(...) is None for
+    this (country, category) -- Armenia has no entry here at all (it isn't
+    a fixed-period country), so an unrecognized/AM country_code falls back
+    to Georgia's own rule, same "assume Georgia" default used everywhere
+    else in this module. Callers must not rely on that fallback ever firing
+    for AM in practice -- it's a safety net, not a real code path."""
+    return _FIXED_DURATION_DATE_RULES.get(country_code, DATE_RULE)
+
+
+def _category_period_step_completed(settings, draft: dict | None) -> bool:
+    """True once /category-period's OWN required data is present: always a
+    category, plus -- for a FIXED-period (country, category) -- a
+    period_code too. An EXACT DATE RANGE product (AM) has nothing further
+    to pick on /category-period at all (see post_category_period): its
+    period IS the start_date/end_date chosen on the next step, so a bare
+    category is already "done" here."""
+    if not draft or draft.get("vehicle_category_code") is None:
+        return False
+    country_code = _draft_country_code(draft)
+    if _duration_range(settings, country_code, draft["vehicle_category_code"]) is not None:
+        return True
+    return draft.get("period_code") is not None
+
+
+def _parse_duration_range_dates(
+    start_raw: str, end_raw: str, *, today: date, duration_range: DurationRange
+) -> tuple[date | None, date | None, str | None]:
+    """AM-style EXACT DATE RANGE validation: both dates are direct user
+    input (see the module-level comment on _FIXED_DURATION_DATE_RULES) --
+    there is no period_code to compute end_date FROM, so this is pure
+    validation, not date-math. duration_days uses the exact same "end -
+    start, in calendar days" definition GeorgiaDateRule's own period codes
+    already imply (see that class's docstring: "15d" means start_date + 15
+    days exactly, i.e. end_date - start_date == 15) -- so "10 days" here
+    means end_date is start_date + 10 days: duration_range.min_days <=
+    (end_date - start_date).days <= duration_range.max_days, inclusive on
+    both ends. Returns (start_date, end_date, error) -- the first two are
+    None whenever error is not None, same shape as
+    _parse_and_validate_start_date."""
+    parsed_start, error = _parse_and_validate_start_date(start_raw, today)
+    if error:
+        return None, None, error
+
+    try:
+        parsed_end = date.fromisoformat(end_raw)
+    except ValueError:
+        return None, None, "Некорректная дата окончания"
+
+    duration_days = (parsed_end - parsed_start).days
+    if duration_days < duration_range.min_days:
+        return None, None, f"Минимальный срок страхования — {duration_range.min_days} дней"
+    if duration_days > duration_range.max_days:
+        return None, None, f"Максимальный срок страхования — {duration_range.max_days} дней"
+    return parsed_start, parsed_end, None
 
 
 def _require_draft_keys(draft: dict | None, keys: tuple[str, ...]) -> bool:
@@ -127,13 +206,21 @@ def get_category_period(
     country_code = _draft_country_code(draft)
     categories = catalog_repo.list_categories(conn, allowed_codes=_allowed_category_codes(settings, country_code))
     selected_category = draft.get("vehicle_category_code") or "passenger_car"
-    periods = available_periods(settings, country_code, selected_category)
-    # Default to the first priced period only when nothing has been chosen
-    # yet — never overwrite a period the user (or an earlier draft) already
-    # picked. Purely a display default: nothing is written to the draft
-    # until the form is actually submitted.
-    priced = [p for p in periods if p.is_priced]
-    selected_period = draft.get("period_code") or (priced[0].code if priced else None)
+    duration_range = _duration_range(settings, country_code, selected_category)
+    if duration_range is not None:
+        # EXACT DATE RANGE product (AM) -- no period list on this screen at
+        # all, see category_period.html's duration_range branch; the period
+        # itself is chosen via start_date/end_date on the next step.
+        periods = []
+        selected_period = None
+    else:
+        periods = available_periods(settings, country_code, selected_category)
+        # Default to the first priced period only when nothing has been
+        # chosen yet — never overwrite a period the user (or an earlier
+        # draft) already picked. Purely a display default: nothing is
+        # written to the draft until the form is actually submitted.
+        priced = [p for p in periods if p.is_priced]
+        selected_period = draft.get("period_code") or (priced[0].code if priced else None)
     return render(
         request,
         "category_period.html",
@@ -142,6 +229,7 @@ def get_category_period(
             "selected_category": selected_category,
             "periods": periods,
             "selected_period": selected_period,
+            "duration_range": duration_range,
             "steps": build_draft_steps(draft, 1),
             "form_action": "/category-period",
             "back_url": "/",
@@ -175,7 +263,13 @@ def get_periods_for_category(
 def post_category_period(
     request: Request,
     category_code: str = Form(...),
-    period_code: str = Form(...),
+    # Form("") not Form(...): an EXACT DATE RANGE submission (AM) legitimately
+    # posts an empty period_code (see category_period.html's duration_range
+    # branch) -- Form(...) treats an empty-string form field as outright
+    # missing (a Starlette/FastAPI form-parsing quirk, confirmed against a
+    # minimal repro), which would 422 every real AM submission before this
+    # handler's own code ever got a chance to see it.
+    period_code: str = Form(""),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -191,19 +285,36 @@ def post_category_period(
     # country's checkout doesn't actually offer.
     if category is not None and allowed_codes is not None and category.code not in allowed_codes:
         category = None
-    period = get_period(settings, country_code, category_code, period_code) if category else None
+
+    duration_range = _duration_range(settings, country_code, category.code) if category else None
 
     error = None
+    period = None
     if category is None:
         error = "Выберите категорию транспорта"
-    elif period is None:
-        error = "Выберите один из доступных периодов"
-    elif not period.is_priced:
-        error = "Цена для этого периода пока не настроена — оформление временно недоступно"
+    elif duration_range is not None:
+        # EXACT DATE RANGE product (AM) -- nothing else to validate on THIS
+        # step at all: there is no period_code, and start_date/end_date are
+        # chosen on the next step (see post_date_step's duration_range
+        # branch). A category alone is a complete /category-period
+        # submission for this kind of product.
+        pass
+    else:
+        period = get_period(settings, country_code, category_code, period_code)
+        if period is None:
+            error = "Выберите один из доступных периодов"
+        elif not period.is_priced:
+            error = "Цена для этого периода пока не настроена — оформление временно недоступно"
 
     if error:
         categories = catalog_repo.list_categories(conn, allowed_codes=allowed_codes)
-        periods = available_periods(settings, country_code, category_code)
+        # Re-derive duration_range from the RAW submitted category_code (not
+        # the possibly-None `category` above) so an unknown-category error
+        # still redisplays using whatever the category_code the user
+        # actually typed would have meant, same as the periods list below
+        # already did before this change.
+        redisplay_duration_range = _duration_range(settings, country_code, category_code)
+        periods = [] if redisplay_duration_range is not None else available_periods(settings, country_code, category_code)
         return render(
             request,
             "category_period.html",
@@ -212,6 +323,7 @@ def post_category_period(
                 "selected_category": category_code,
                 "periods": periods,
                 "selected_period": None,
+                "duration_range": redisplay_duration_range,
                 "error": error,
                 "steps": build_draft_steps(draft, 1),
                 "form_action": "/category-period",
@@ -220,6 +332,22 @@ def post_category_period(
             },
             status_code=422,
         )
+
+    if duration_range is not None:
+        draft_update = {
+            "vehicle_category_code": category.code,
+            "period_code": None,
+            "price_customer_minor": None,
+        }
+        merge_draft(conn, session_id, draft_update)
+        log_event(
+            conn,
+            session_id=session_id,
+            order_id=None,
+            event_name="category_period_selected",
+            properties={"category": category.code, "period": None},
+        )
+        return _redirect("/date")
 
     draft_update = {
         "vehicle_category_code": category_code,
@@ -233,7 +361,9 @@ def post_category_period(
     # resubmitted. Recompute it now so nothing downstream ever reads a
     # start/end pair that don't actually match the current period.
     if draft.get("start_date"):
-        recomputed_end = DATE_RULE.compute_end_date(date.fromisoformat(draft["start_date"]), period.code)
+        recomputed_end = _fixed_duration_date_rule(country_code).compute_end_date(
+            date.fromisoformat(draft["start_date"]), period.code
+        )
         draft_update["end_date"] = recomputed_end.isoformat()
 
     merge_draft(conn, session_id, draft_update)
@@ -259,31 +389,61 @@ def get_date_step(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     draft = get_draft(conn, session_id)
-    if not _require_draft_keys(draft, ("vehicle_category_code", "period_code")):
+    settings = get_settings()
+    if not _category_period_step_completed(settings, draft):
         return _redirect("/category-period")
 
+    country_code = _draft_country_code(draft)
+    duration_range = _duration_range(settings, country_code, draft["vehicle_category_code"])
+
+    if duration_range is None:
+        start_value = draft.get("start_date")
+        # A fresh checkout (draft has no start_date yet) defaults the FIELD
+        # DISPLAY to today in Georgia -- never UTC/the browser's own
+        # timezone, and never written into the draft here; it only becomes
+        # the chosen value once the user actually submits the form. Once a
+        # start_date exists in the draft (the user already chose one, even
+        # if it was today), it's shown as-is on every later visit -- this
+        # default never overwrites a real choice on back/forward navigation.
+        effective_start = date.fromisoformat(start_value) if start_value else today_in_georgia()
+        end_value = _fixed_duration_date_rule(country_code).compute_end_date(effective_start, draft["period_code"])
+        return render(
+            request,
+            "date_step.html",
+            {
+                "duration_range": None,
+                "start_date": effective_start,
+                "end_date": end_value,
+                "min_date": today_in_georgia().isoformat(),
+                "steps": build_draft_steps(draft, 2),
+                "form_action": "/date",
+                "back_url": "/category-period",
+                "submit_label": "Далее",
+                "date_preview_url": "/api/date-preview",
+            },
+        )
+
+    # EXACT DATE RANGE product (AM): both dates are direct user input, so
+    # there's nothing to auto-compute here -- just show whatever the draft
+    # already holds (same "never overwrite a real choice" rule as above).
     start_value = draft.get("start_date")
-    # A fresh checkout (draft has no start_date yet) defaults the FIELD
-    # DISPLAY to today in Georgia -- never UTC/the browser's own timezone,
-    # and never written into the draft here; it only becomes the chosen
-    # value once the user actually submits the form. Once a start_date
-    # exists in the draft (the user already chose one, even if it was
-    # today), it's shown as-is on every later visit -- this default never
-    # overwrites a real choice on back/forward navigation.
+    end_value = draft.get("end_date")
     effective_start = date.fromisoformat(start_value) if start_value else today_in_georgia()
-    end_value = DATE_RULE.compute_end_date(effective_start, draft["period_code"])
+    effective_end = date.fromisoformat(end_value) if end_value else None
+    duration_days = (effective_end - effective_start).days if effective_end else None
     return render(
         request,
         "date_step.html",
         {
+            "duration_range": duration_range,
             "start_date": effective_start,
-            "end_date": end_value,
+            "end_date": effective_end,
+            "duration_days": duration_days,
             "min_date": today_in_georgia().isoformat(),
             "steps": build_draft_steps(draft, 2),
             "form_action": "/date",
             "back_url": "/category-period",
             "submit_label": "Далее",
-            "date_preview_url": "/api/date-preview",
         },
     )
 
@@ -294,6 +454,11 @@ def get_date_preview_preorder(
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
+    """FIXED-period countries only (see date_step.html, which never sets
+    window.INSURANCE_DATE_PREVIEW_URL -- and so never calls this endpoint --
+    for an EXACT DATE RANGE draft): a duration-range draft has no
+    period_code, so this 400s exactly like it already did for any draft
+    that hasn't reached a period yet, never a 500/KeyError."""
     draft = get_draft(conn, session_id)
     if not _require_draft_keys(draft, ("period_code",)):
         raise HTTPException(status_code=400, detail="Period not selected yet")
@@ -303,8 +468,9 @@ def get_date_preview_preorder(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date")
 
+    country_code = _draft_country_code(draft)
     try:
-        end_date = DATE_RULE.compute_end_date(start_date, draft["period_code"])
+        end_date = _fixed_duration_date_rule(country_code).compute_end_date(start_date, draft["period_code"])
     except UnknownPeriodCode as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -315,35 +481,67 @@ def get_date_preview_preorder(
 def post_date_step(
     request: Request,
     start_date: str = Form(...),
+    end_date: str = Form(""),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     draft = get_draft(conn, session_id)
-    if not _require_draft_keys(draft, ("vehicle_category_code", "period_code")):
+    settings = get_settings()
+    if not _category_period_step_completed(settings, draft):
         return _redirect("/category-period")
 
+    country_code = _draft_country_code(draft)
+    duration_range = _duration_range(settings, country_code, draft["vehicle_category_code"])
     today = today_in_georgia()
-    parsed_start, error = _parse_and_validate_start_date(start_date, today)
+
+    if duration_range is None:
+        parsed_start, error = _parse_and_validate_start_date(start_date, today)
+        if error:
+            return render(
+                request,
+                "date_step.html",
+                {
+                    "duration_range": None,
+                    "start_date": None,
+                    "end_date": None,
+                    "min_date": today.isoformat(),
+                    "error": error,
+                    "steps": build_draft_steps(draft, 2),
+                    "form_action": "/date",
+                    "back_url": "/category-period",
+                    "submit_label": "Далее",
+                    "date_preview_url": "/api/date-preview",
+                },
+                status_code=422,
+            )
+
+        computed_end_date = _fixed_duration_date_rule(country_code).compute_end_date(parsed_start, draft["period_code"])
+        merge_draft(conn, session_id, {"start_date": parsed_start.isoformat(), "end_date": computed_end_date.isoformat()})
+        return _redirect("/method")
+
+    parsed_start, parsed_end, error = _parse_duration_range_dates(
+        start_date, end_date, today=today, duration_range=duration_range
+    )
     if error:
         return render(
             request,
             "date_step.html",
             {
+                "duration_range": duration_range,
                 "start_date": None,
                 "end_date": None,
+                "duration_days": None,
                 "min_date": today.isoformat(),
                 "error": error,
                 "steps": build_draft_steps(draft, 2),
                 "form_action": "/date",
                 "back_url": "/category-period",
                 "submit_label": "Далее",
-                "date_preview_url": "/api/date-preview",
             },
             status_code=422,
         )
 
-    end_date = DATE_RULE.compute_end_date(parsed_start, draft["period_code"])
-    merge_draft(conn, session_id, {"start_date": parsed_start.isoformat(), "end_date": end_date.isoformat()})
+    merge_draft(conn, session_id, {"start_date": parsed_start.isoformat(), "end_date": parsed_end.isoformat()})
     return _redirect("/method")
 
 
@@ -979,6 +1177,20 @@ def post_policyholder(
     draft = get_draft(conn, session_id)
     if not _require_draft_keys(draft, ("manufacturer_id", "model_id")):
         return _redirect("/vehicle")
+    if draft.get("price_customer_minor") is None:
+        # No pricing mechanism exists yet for this (country, category) --
+        # currently only AM's EXACT DATE RANGE product reaches here with a
+        # price of None (see post_category_period's duration_range branch;
+        # GE/TR's own is_priced gate at /category-period already prevents
+        # this for them). Never create an Order with a NULL price -- every
+        # summary/payment template assumes a real integer -- and never
+        # invent one (explicitly out of scope, see the gap-analysis
+        # report's PricingProvider design). Send the customer back to the
+        # start of the wizard rather than let them fill in vehicle/
+        # policyholder details for a product that can't be priced or paid
+        # for yet.
+        log_event(conn, session_id=session_id, order_id=None, event_name="order_blocked_no_price")
+        return _redirect("/category-period")
 
     submitted_contacts = {
         "contact_email": contact_email,
@@ -1200,6 +1412,15 @@ def get_edit_coverage(
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
+    # NOT extended to EXACT DATE RANGE products (AM) in this step -- no real
+    # AM order can exist yet (see post_policyholder's price guard), so this
+    # only ever renders for a FIXED-period order today. It still renders
+    # safely (never a crash) if that changes: an AM order's
+    # available_periods() is simply empty, same "скоро будет доступна"
+    # message the template already shows for any category with no periods
+    # configured -- not the ideal message for a duration-range product, but
+    # not a bug either. Editing an AM order's category/duration is future
+    # work, not this step's.
     settings = get_settings()
     categories = catalog_repo.list_categories(
         conn, allowed_codes=_allowed_category_codes(settings, order.country_code)
@@ -1269,7 +1490,7 @@ def post_edit_coverage(
     # Same dependency invalidation as the pre-order wizard: a period change
     # recomputes end_date from the order's EXISTING start_date -- the order
     # itself (id, token) never changes.
-    new_end_date = DATE_RULE.compute_end_date(order.start_date, period.code)
+    new_end_date = _fixed_duration_date_rule(order.country_code).compute_end_date(order.start_date, period.code)
     set_dates(conn, order.id, start_date=order.start_date, end_date=new_end_date)
     return _redirect(f"/o/{resume_token}/summary")
 
@@ -1279,18 +1500,39 @@ def get_edit_date(
     request: Request,
     order: Order = Depends(get_order_or_404),
 ):
+    settings = get_settings()
+    duration_range = _duration_range(settings, order.country_code, order.vehicle_category_code)
+    if duration_range is None:
+        return render(
+            request,
+            "date_step.html",
+            {
+                "duration_range": None,
+                "start_date": order.start_date,
+                "end_date": order.end_date,
+                "min_date": today_in_georgia().isoformat(),
+                "steps": build_order_steps(order, 2),
+                "form_action": f"/o/{order.resume_token}/edit-date",
+                "back_url": f"/o/{order.resume_token}/summary",
+                "submit_label": "Сохранить",
+                "date_preview_url": f"/o/{order.resume_token}/date-preview",
+            },
+        )
+
+    duration_days = (order.end_date - order.start_date).days if order.start_date and order.end_date else None
     return render(
         request,
         "date_step.html",
         {
+            "duration_range": duration_range,
             "start_date": order.start_date,
             "end_date": order.end_date,
+            "duration_days": duration_days,
             "min_date": today_in_georgia().isoformat(),
             "steps": build_order_steps(order, 2),
             "form_action": f"/o/{order.resume_token}/edit-date",
             "back_url": f"/o/{order.resume_token}/summary",
             "submit_label": "Сохранить",
-            "date_preview_url": f"/o/{order.resume_token}/date-preview",
         },
     )
 
@@ -1300,31 +1542,62 @@ def post_edit_date(
     request: Request,
     resume_token: str,
     start_date: str = Form(...),
+    end_date: str = Form(""),
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
+    settings = get_settings()
+    duration_range = _duration_range(settings, order.country_code, order.vehicle_category_code)
     today = today_in_georgia()
-    parsed_start, error = _parse_and_validate_start_date(start_date, today)
+
+    if duration_range is None:
+        parsed_start, error = _parse_and_validate_start_date(start_date, today)
+        if error:
+            return render(
+                request,
+                "date_step.html",
+                {
+                    "duration_range": None,
+                    "start_date": None,
+                    "end_date": None,
+                    "min_date": today.isoformat(),
+                    "error": error,
+                    "steps": build_order_steps(order, 2),
+                    "form_action": f"/o/{resume_token}/edit-date",
+                    "back_url": f"/o/{resume_token}/summary",
+                    "submit_label": "Сохранить",
+                    "date_preview_url": f"/o/{resume_token}/date-preview",
+                },
+                status_code=422,
+            )
+
+        new_end_date = _fixed_duration_date_rule(order.country_code).compute_end_date(parsed_start, order.period_code)
+        set_dates(conn, order.id, start_date=parsed_start, end_date=new_end_date)
+        return _redirect(f"/o/{resume_token}/summary")
+
+    parsed_start, parsed_end, error = _parse_duration_range_dates(
+        start_date, end_date, today=today, duration_range=duration_range
+    )
     if error:
         return render(
             request,
             "date_step.html",
             {
+                "duration_range": duration_range,
                 "start_date": None,
                 "end_date": None,
+                "duration_days": None,
                 "min_date": today.isoformat(),
                 "error": error,
                 "steps": build_order_steps(order, 2),
                 "form_action": f"/o/{resume_token}/edit-date",
                 "back_url": f"/o/{resume_token}/summary",
                 "submit_label": "Сохранить",
-                "date_preview_url": f"/o/{resume_token}/date-preview",
             },
             status_code=422,
         )
 
-    new_end_date = DATE_RULE.compute_end_date(parsed_start, order.period_code)
-    set_dates(conn, order.id, start_date=parsed_start, end_date=new_end_date)
+    set_dates(conn, order.id, start_date=parsed_start, end_date=parsed_end)
     return _redirect(f"/o/{resume_token}/summary")
 
 

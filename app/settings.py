@@ -27,9 +27,28 @@ class PeriodConfig(BaseModel):
     price_rub: int | None = None
 
 
+class DurationRangeConfig(BaseModel):
+    # EXACT DATE RANGE product (currently Armenia's foreign-vehicle CMTPL):
+    # the customer picks start_date/end_date directly rather than choosing
+    # from a fixed period list -- see app.pricing.provider.get_duration_range
+    # and app.web.checkout_routes._parse_duration_range_dates, the only
+    # consumers. Deliberately has no price field at all: PRICE AVAILABILITY
+    # is a separate concern from PERIOD AVAILABILITY (see the GE/AM/TR
+    # gap-analysis report) -- a duration-range product has no
+    # PricingProvider yet, and this config never pretends otherwise.
+    min_days: int
+    max_days: int
+
+
 class PricingSettings(BaseModel):
     # country -> vehicle_category_code -> periods
     periods_by_country_category: dict[str, dict[str, list[PeriodConfig]]]
+    # country -> vehicle_category_code -> duration range, for EXACT DATE
+    # RANGE products only (see DurationRangeConfig). A (country, category)
+    # pair is either a fixed-period product (present in
+    # periods_by_country_category) or an exact-duration one (present here),
+    # never both -- app.web.checkout_routes checks this one first.
+    duration_ranges_by_country_category: dict[str, dict[str, DurationRangeConfig]] = {}
 
 
 class CatalogSettings(BaseModel):
@@ -167,6 +186,15 @@ def load_settings(project_root: Path) -> Settings:
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Invalid pricing structure in {config_path}: {exc}") from exc
 
+    duration_ranges_raw = raw.get("duration_ranges", {})
+    try:
+        duration_ranges_by_country_category = {
+            country: {category_code: DurationRangeConfig(**d) for category_code, d in categories.items()}
+            for country, categories in duration_ranges_raw.items()
+        }
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Invalid duration_ranges structure in {config_path}: {exc}") from exc
+
     db_file = project_root / os.getenv("INSURANCE_DB_FILE", "data/insurance.db")
 
     catalog_raw = raw.get("catalog", {})
@@ -178,7 +206,10 @@ def load_settings(project_root: Path) -> Settings:
             cookie_secure=_parse_bool(os.getenv("COOKIE_SECURE")),
             secret_key=os.getenv("APP_SECRET_KEY", ""),
         ),
-        pricing=PricingSettings(periods_by_country_category=periods_by_country_category),
+        pricing=PricingSettings(
+            periods_by_country_category=periods_by_country_category,
+            duration_ranges_by_country_category=duration_ranges_by_country_category,
+        ),
         catalog=CatalogSettings(enabled_category_codes_by_country=enabled_category_codes_by_country),
         payment=PaymentSettings(
             bank_name=os.getenv("PAYMENT_BANK_NAME", "Bank"),

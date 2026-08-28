@@ -118,6 +118,38 @@ pricing:
         label: "90 дней"
         price_rub: 3649
 
+  # Turkey: FIXED-PERIOD product (unlike Armenia's exact-date-range one
+  # below), same shape as Georgia's own pricing lists -- see
+  # app.dates.rules.FixedDurationDateRule for the date math. price_rub is
+  # deliberately null for every period here: this step (GE/AM/TR period+date
+  # model) is NOT the step that prices Turkey -- see the gap-analysis
+  # report's PricingProvider design. A null price already means "period
+  # exists, not selectable yet" throughout this codebase (see
+  # PeriodOption.is_priced) -- this is the SAME existing mechanism Georgia's
+  # own periods used before business confirmed real RUB numbers, not a new
+  # one invented for Turkey. Only passenger_car is populated (Step 2 limits
+  # TR to passenger_car); the periods_by_country_category structure is
+  # already keyed by category, so adding motorcycle/trailer/truck/etc. later
+  # needs no code change, just more entries here once their period sets are
+  # confirmed (they are NOT assumed to be the same 5 periods).
+  TR:
+    passenger_car:
+      - code: "30d"
+        label: "30 дней"
+        price_rub: null
+      - code: "45d"
+        label: "45 дней"
+        price_rub: null
+      - code: "90d"
+        label: "90 дней"
+        price_rub: null
+      - code: "180d"
+        label: "180 дней"
+        price_rub: null
+      - code: "365d"
+        label: "365 дней"
+        price_rub: null
+
 # country -> which internal vehicle_category_code values are enabled for that
 # country's checkout (see app.catalog.repository.list_categories's
 # allowed_codes param). A country absent here (Georgia) is UNRESTRICTED --
@@ -131,3 +163,19 @@ catalog:
   enabled_category_codes_by_country:
     AM: ["passenger_car"]
     TR: ["passenger_car"]
+
+# country -> vehicle_category_code -> {min_days, max_days} -- EXACT DATE
+# RANGE products (currently only Armenia's foreign-vehicle CMTPL, per the
+# gap-analysis report: 10-day minimum, confirmed by law HO-63-N Art. 6.2 +
+# Nairi Insurance + the State Revenue Committee's border guide; 365-day
+# maximum, same ceiling as domestic policies). A (country, category) pair
+# here must NOT also appear under pricing.<country>.<category> above -- it's
+# one product model or the other, never both (see
+# app.pricing.provider.get_duration_range, checked before available_periods
+# everywhere this matters). Deliberately no price here at all -- see that
+# section's own comment on PRICE AVAILABILITY vs PERIOD AVAILABILITY.
+duration_ranges:
+  AM:
+    passenger_car:
+      min_days: 10
+      max_days: 365

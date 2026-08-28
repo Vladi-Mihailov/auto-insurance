@@ -30,7 +30,7 @@ from app.orders.repository import set_dates, set_period, set_status
 from app.orders.state_machine import OrderStatus
 from app.pricing.provider import available_periods, get_period
 from app.sessions.repository import merge_draft
-from app.web.checkout_routes import DEFAULT_COUNTRY_CODE, SUPPORTED_COUNTRY_CODES
+from app.web.checkout_routes import DEFAULT_COUNTRY_CODE, SUPPORTED_COUNTRY_CODES, _fixed_duration_date_rule
 from app.web.step_nav import build_order_steps
 from app.web.templating import render
 
@@ -41,7 +41,15 @@ DATE_RULE = GeorgiaDateRule()
 
 def _resume_redirect(order: Order) -> RedirectResponse:
     base = f"/o/{order.resume_token}"
-    if not order.period_code:
+    # A period_code-less order is either (a) a legitimate EXACT DATE RANGE
+    # product (AM's passenger_car) that never had one BY DESIGN -- always
+    # distinguishable by already having real start/end dates, since
+    # create_order sets both together for every country -- or (b) a
+    # genuinely incomplete LEGACY order from before period_code existed at
+    # all, which also has no dates yet either. Only (b) belongs on the
+    # legacy /period route; sending (a) there would be wrong (that route
+    # has no idea how to handle a duration-range product).
+    if not order.period_code and not (order.start_date and order.end_date):
         return RedirectResponse(f"{base}/period", status_code=303)  # legacy path only
     if not order.start_date or not order.end_date:
         return RedirectResponse(f"{base}/date", status_code=303)  # legacy path only
@@ -171,6 +179,16 @@ def get_date_screen(request: Request, order: Order = Depends(get_order_or_404)):
 
 @router.get("/o/{resume_token}/date-preview")
 def get_date_preview(start: str, order: Order = Depends(get_order_or_404)):
+    """Shared by the LEGACY /o/{token}/date screen above AND the NEW
+    /o/{token}/edit-date screen (see app.web.checkout_routes.get_edit_date,
+    which points its date_preview_url here) -- so this must be country-
+    aware (Turkey's period codes aren't the same day-count set Georgia's
+    own GeorgiaDateRule recognizes), unlike get_date_screen/post_date
+    above, which really are legacy-only. Never called for an EXACT DATE
+    RANGE order (AM) -- get_edit_date only sets date_preview_url for a
+    fixed-period order in the first place, and this order.period_code
+    guard would 400 the same way it already does for any period-less
+    order rather than crash."""
     if not order.period_code:
         raise HTTPException(status_code=400, detail="Period not selected yet")
     try:
@@ -179,7 +197,7 @@ def get_date_preview(start: str, order: Order = Depends(get_order_or_404)):
         raise HTTPException(status_code=400, detail="Invalid date")
 
     try:
-        end_date = DATE_RULE.compute_end_date(start_date, order.period_code)
+        end_date = _fixed_duration_date_rule(order.country_code).compute_end_date(start_date, order.period_code)
     except UnknownPeriodCode as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -219,7 +237,10 @@ def post_date(
 
 @router.get("/o/{resume_token}/summary")
 def get_summary(request: Request, order: Order = Depends(get_order_or_404), conn: sqlite3.Connection = Depends(get_db)):
-    if not order.period_code:
+    # See _resume_redirect's own comment on this exact condition: a
+    # period_code-less order with real dates already is a legitimate EXACT
+    # DATE RANGE product (AM), not an incomplete legacy one.
+    if not order.period_code and not (order.start_date and order.end_date):
         return RedirectResponse(f"/o/{order.resume_token}/period", status_code=303)
     if not order.start_date:
         return RedirectResponse(f"/o/{order.resume_token}/date", status_code=303)
@@ -230,10 +251,17 @@ def get_summary(request: Request, order: Order = Depends(get_order_or_404), conn
         category_name = category.name if category else order.vehicle_category_code
 
     period_label = order.period_code
-    if order.vehicle_category_code:
+    if order.vehicle_category_code and order.period_code:
         period = get_period(get_settings(), order.country_code, order.vehicle_category_code, order.period_code)
         if period:
             period_label = period.label
+    if order.period_code is None and order.start_date and order.end_date:
+        # Duration-range product (AM) -- there's no period label to look up
+        # at all, the dates themselves ARE the product. Same "end - start"
+        # duration definition used everywhere else this step (see
+        # app.web.checkout_routes._parse_duration_range_dates).
+        duration_days = (order.end_date - order.start_date).days
+        period_label = f"{duration_days} дней"
 
     # vehicle_make/vehicle_model are a point-in-time SNAPSHOT taken at order
     # creation/edit (see app.orders.repository.create_order), not a live

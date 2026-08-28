@@ -91,15 +91,20 @@ def test_am_category_period_screen_only_shows_passenger_car(real_config):
 
 
 def test_am_passenger_car_clears_the_category_check(real_config):
-    """passenger_car is enabled for AM -- the submission must fail on the
-    PERIOD check (no AM pricing configured yet), never the category check.
-    This is the "accepted server-side" assertion for AM."""
+    """passenger_car is enabled for AM -- and, as of Step 3, AM's
+    passenger_car is an EXACT DATE RANGE product (see
+    app.pricing.provider.get_duration_range), so a valid category is now a
+    COMPLETE /category-period submission on its own (no period_code to
+    reject or accept) -- straight through to /date, never a category
+    error. This supersedes Step 2's own version of this test, written
+    before AM had a period/date model at all."""
     client = TestClient(app)
     _start(client, "AM")
-    response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": "10d"})
-    assert response.status_code == 422
-    assert "Выберите один из доступных периодов" in response.text
-    assert "Выберите категорию транспорта" not in response.text
+    response = client.post(
+        "/category-period", data={"category_code": "passenger_car", "period_code": ""}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/date"
 
 
 def test_am_disabled_category_is_rejected(real_config):
@@ -125,12 +130,19 @@ def test_tr_category_period_screen_only_shows_passenger_car(real_config):
 
 
 def test_tr_passenger_car_clears_the_category_check(real_config):
+    """passenger_car is enabled for TR -- and, as of Step 3, TR has real
+    (if still unpriced) periods configured (see config.yaml's
+    pricing.TR.passenger_car), so a valid category+period now fails on the
+    PRICE check specifically, never the category check -- a more precise
+    assertion than Step 2's own version of this test, written before TR
+    had any periods configured at all."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
     assert response.status_code == 422
-    assert "Выберите один из доступных периодов" in response.text
+    assert "Цена для этого периода пока не настроена" in response.text
     assert "Выберите категорию транспорта" not in response.text
+    assert "Выберите один из доступных периодов" not in response.text
 
 
 def test_tr_disabled_category_is_rejected(real_config):
@@ -167,12 +179,23 @@ def test_am_api_periods_is_empty_not_500_and_not_ge_prices(real_config):
     assert response.json() == []
 
 
-def test_tr_api_periods_is_empty_not_500_and_not_ge_prices(real_config):
+def test_tr_api_periods_lists_the_five_tr_periods_all_unpriced_not_ge_prices(real_config):
+    """As of Step 3, TR's passenger_car has real period AVAILABILITY (30/45/
+    90/180/365 days) but deliberately no PRICE yet -- see config.yaml's
+    pricing.TR.passenger_car and the gap-analysis report's PERIOD
+    AVAILABILITY vs PRICE AVAILABILITY split. Supersedes Step 2's "empty
+    list" version of this test (written before TR had any periods
+    configured at all): the safety property that actually matters --
+    never Georgia's real prices -- is asserted directly on every period."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     assert response.status_code == 200
-    assert response.json() == []
+    periods = response.json()
+    assert [p["code"] for p in periods] == ["30d", "45d", "90d", "180d", "365d"]
+    for period in periods:
+        assert period["is_priced"] is False
+        assert period["price_rub"] is None
 
 
 def test_am_category_period_get_screen_renders_without_error_and_shows_no_priced_period(real_config):
