@@ -42,11 +42,33 @@ from app.web.templating import render
 router = APIRouter()
 
 DATE_RULE = GeorgiaDateRule()
-COUNTRY_CODE = "GE"
+
+# The only checkout-level notion of "which countries exist" right now (step 1
+# of the multi-country rollout -- see the GE/AM/TR gap-analysis report this
+# implements). AM/TR are accepted here so country_code survives the draft ->
+# Order round-trip, but nothing else in this module is country-aware yet:
+# pricing/periods/dates/vehicle fields are still 100% Georgia-shaped (see
+# app.pricing.provider, app.dates.rules) -- an AM/TR draft simply finds no
+# priced periods anywhere and cannot proceed past /category-period. That's
+# deliberate for this step, not a bug.
+SUPPORTED_COUNTRY_CODES = ("GE", "AM", "TR")
+DEFAULT_COUNTRY_CODE = "GE"
 
 
 def _redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
+
+
+def _draft_country_code(draft: dict | None) -> str:
+    """The country chosen at /start (see app.web.routes.start), carried
+    through the whole pre-order draft. Falls back to DEFAULT_COUNTRY_CODE
+    for a draft that predates this key (an in-flight session from before
+    this change, or any direct/bookmarked entry into the wizard that
+    skipped /start entirely) -- this deep into the wizard a missing/unknown
+    country is never a user-facing error, just "assume Georgia", exactly
+    the implicit behaviour every existing GE checkout already relied on."""
+    country_code = (draft or {}).get("country_code")
+    return country_code if country_code in SUPPORTED_COUNTRY_CODES else DEFAULT_COUNTRY_CODE
 
 
 def _require_draft_keys(draft: dict | None, keys: tuple[str, ...]) -> bool:
@@ -90,9 +112,10 @@ def get_category_period(
 ):
     draft = get_draft(conn, session_id) or {}
     settings = get_settings()
+    country_code = _draft_country_code(draft)
     categories = catalog_repo.list_categories(conn)
     selected_category = draft.get("vehicle_category_code") or "passenger_car"
-    periods = available_periods(settings, COUNTRY_CODE, selected_category)
+    periods = available_periods(settings, country_code, selected_category)
     # Default to the first priced period only when nothing has been chosen
     # yet — never overwrite a period the user (or an earlier draft) already
     # picked. Purely a display default: nothing is written to the draft
@@ -116,12 +139,21 @@ def get_category_period(
 
 
 @router.get("/api/periods")
-def get_periods_for_category(category_code: str):
+def get_periods_for_category(
+    category_code: str,
+    session_id: str = Depends(get_session_id),
+    conn: sqlite3.Connection = Depends(get_db),
+):
     """Small JSON helper so the category tiles can refresh the period list
     without a full page reload when the user switches category — same
-    JSONResponse pattern as the existing date-preview endpoint."""
+    JSONResponse pattern as the existing date-preview endpoint. Country
+    comes from the draft, same as every other step (see
+    _draft_country_code) -- this now needs the session/db deps it didn't
+    before to read that draft."""
     settings = get_settings()
-    periods = available_periods(settings, COUNTRY_CODE, category_code)
+    draft = get_draft(conn, session_id)
+    country_code = _draft_country_code(draft)
+    periods = available_periods(settings, country_code, category_code)
     return JSONResponse(
         [{"code": p.code, "label": p.label, "price_rub": p.price_rub, "is_priced": p.is_priced} for p in periods]
     )
@@ -137,8 +169,9 @@ def post_category_period(
 ):
     draft = get_draft(conn, session_id) or {}
     settings = get_settings()
+    country_code = _draft_country_code(draft)
     category = catalog_repo.get_category_by_code(conn, category_code)
-    period = get_period(settings, COUNTRY_CODE, category_code, period_code) if category else None
+    period = get_period(settings, country_code, category_code, period_code) if category else None
 
     error = None
     if category is None:
@@ -150,7 +183,7 @@ def post_category_period(
 
     if error:
         categories = catalog_repo.list_categories(conn)
-        periods = available_periods(settings, COUNTRY_CODE, category_code)
+        periods = available_periods(settings, country_code, category_code)
         return render(
             request,
             "category_period.html",
@@ -1002,7 +1035,7 @@ def post_policyholder(
     order = create_order(
         conn,
         session_id=session_id,
-        country_code=COUNTRY_CODE,
+        country_code=_draft_country_code(draft),
         vehicle_category_code=draft["vehicle_category_code"],
         period_code=draft["period_code"],
         start_date=date.fromisoformat(draft["start_date"]),

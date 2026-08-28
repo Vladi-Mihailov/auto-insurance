@@ -45,9 +45,9 @@ from app.web.templating import _format_rub
 logger = logging.getLogger(__name__)
 
 # Display labels only, for the destination countries this checkout
-# currently supports (see app.web.checkout_routes.COUNTRY_CODE) -- not a
-# new stored field. Falls back to the raw code for anything unrecognized
-# rather than guessing.
+# currently supports (see app.web.checkout_routes.SUPPORTED_COUNTRY_CODES) --
+# not a new stored field. Falls back to the raw code for anything
+# unrecognized rather than guessing.
 _COUNTRY_NAMES = {"GE": "Грузия", "AM": "Армения", "TR": "Турция"}
 
 

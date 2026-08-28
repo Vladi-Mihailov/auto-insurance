@@ -29,6 +29,8 @@ from app.orders.models import Order
 from app.orders.repository import set_dates, set_period, set_status
 from app.orders.state_machine import OrderStatus
 from app.pricing.provider import available_periods, get_period
+from app.sessions.repository import merge_draft
+from app.web.checkout_routes import DEFAULT_COUNTRY_CODE, SUPPORTED_COUNTRY_CODES
 from app.web.step_nav import build_order_steps
 from app.web.templating import render
 
@@ -68,8 +70,31 @@ def landing(request: Request, session_id: str = Depends(get_session_id), conn: s
 
 
 @router.get("/start")
-def start(session_id: str = Depends(get_session_id), conn: sqlite3.Connection = Depends(get_db)):
-    log_event(conn, session_id=session_id, order_id=None, event_name="checkout_started")
+def start(
+    country: str | None = None,
+    session_id: str = Depends(get_session_id),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Single, country-aware checkout entrypoint (step 1 of the GE/AM/TR
+    rollout -- see the gap-analysis report this implements). `country` is
+    optional and defaults to Georgia -- existing bookmarks/links to a bare
+    /start (no query string at all) must keep behaving exactly as before.
+    An unrecognized value (typo, tampered link) is treated the same as a
+    missing one rather than surfaced as an error -- this is a checkout
+    entrypoint, not a form submission, so there's no natural place to show
+    a validation message; silently defaulting to Georgia is the same "safe
+    fallback" every downstream step already applies (see
+    app.web.checkout_routes._draft_country_code)."""
+    normalized = (country or "").strip().upper()
+    country_code = normalized if normalized in SUPPORTED_COUNTRY_CODES else DEFAULT_COUNTRY_CODE
+    merge_draft(conn, session_id, {"country_code": country_code})
+    log_event(
+        conn,
+        session_id=session_id,
+        order_id=None,
+        event_name="checkout_started",
+        properties={"country_code": country_code},
+    )
     return RedirectResponse("/category-period", status_code=303)
 
 
