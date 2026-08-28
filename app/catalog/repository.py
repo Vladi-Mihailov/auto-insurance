@@ -22,12 +22,33 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 
-def list_categories(conn: sqlite3.Connection, *, active_only: bool = True) -> list[VehicleCategory]:
+def list_categories(
+    conn: sqlite3.Connection, *, active_only: bool = True, allowed_codes: list[str] | tuple[str, ...] | None = None
+) -> list[VehicleCategory]:
+    """allowed_codes is the one place country-specific category availability
+    is enforced (see app.web.checkout_routes._allowed_category_codes, the
+    only caller that ever passes it) -- None means unrestricted (every
+    category the catalog has, exactly today's behaviour), which is what
+    keeps Georgia's list untouched. An explicit empty list is a real
+    "nothing enabled for this country yet" state, not the same as
+    unrestricted -- short-circuits before hitting the same empty-IN()
+    pitfall documented on deactivate_categories_not_in below."""
+    if allowed_codes is not None and not allowed_codes:
+        return []
+
     query = "SELECT * FROM insurance_vehicle_categories"
+    conditions = []
+    params: list = []
     if active_only:
-        query += " WHERE active = 1"
+        conditions.append("active = 1")
+    if allowed_codes is not None:
+        placeholders = ",".join("?" for _ in allowed_codes)
+        conditions.append(f"code IN ({placeholders})")
+        params.extend(allowed_codes)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY id"
-    return [VehicleCategory.from_row(row) for row in conn.execute(query).fetchall()]
+    return [VehicleCategory.from_row(row) for row in conn.execute(query, params).fetchall()]
 
 
 def get_category_by_code(conn: sqlite3.Connection, code: str) -> VehicleCategory | None:

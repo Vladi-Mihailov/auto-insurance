@@ -117,3 +117,17 @@ pricing:
       - code: "90d"
         label: "90 дней"
         price_rub: 3649
+
+# country -> which internal vehicle_category_code values are enabled for that
+# country's checkout (see app.catalog.repository.list_categories's
+# allowed_codes param). A country absent here (Georgia) is UNRESTRICTED --
+# every category the catalog has stays exactly as it is today. AM/TR are
+# deliberately narrowed to passenger_car only for now: this is an MVP scope
+# limit (their engine-power/duration/pricing data for other categories isn't
+# confirmed yet -- see the GE/AM/TR gap-analysis report), NOT a claim that
+# motorcycle/trailer/truck/bus/special_vehicle aren't insurable in Armenia or
+# Turkey. Add more codes here later; no checkout/route code changes needed.
+catalog:
+  enabled_category_codes_by_country:
+    AM: ["passenger_car"]
+    TR: ["passenger_car"]

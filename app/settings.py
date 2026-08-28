@@ -32,6 +32,18 @@ class PricingSettings(BaseModel):
     periods_by_country_category: dict[str, dict[str, list[PeriodConfig]]]
 
 
+class CatalogSettings(BaseModel):
+    # country -> allowed internal vehicle_category_code list (see
+    # app.catalog.repository.list_categories's allowed_codes param, the only
+    # consumer). A country absent from this mapping is UNRESTRICTED -- every
+    # active category the catalog has is available, exactly today's
+    # behaviour -- which is what keeps Georgia's category list untouched
+    # (it's synced from tpl.ge, never hand-enumerated here) while still
+    # letting a country be deliberately narrowed to an MVP subset (e.g. AM/TR
+    # starting at just passenger_car -- see config/config.yaml).
+    enabled_category_codes_by_country: dict[str, list[str]] = {}
+
+
 class PaymentSettings(BaseModel):
     bank_name: str
     card_number: str
@@ -101,6 +113,7 @@ class TelegramOperatorSettings(BaseModel):
 class Settings(BaseModel):
     app: AppSettings
     pricing: PricingSettings
+    catalog: CatalogSettings = CatalogSettings()
     payment: PaymentSettings
     contacts: ContactSettings = ContactSettings()
     ocr: OcrSettings = OcrSettings()
@@ -156,6 +169,9 @@ def load_settings(project_root: Path) -> Settings:
 
     db_file = project_root / os.getenv("INSURANCE_DB_FILE", "data/insurance.db")
 
+    catalog_raw = raw.get("catalog", {})
+    enabled_category_codes_by_country = catalog_raw.get("enabled_category_codes_by_country", {}) or {}
+
     return Settings(
         app=AppSettings(
             db_file=db_file,
@@ -163,6 +179,7 @@ def load_settings(project_root: Path) -> Settings:
             secret_key=os.getenv("APP_SECRET_KEY", ""),
         ),
         pricing=PricingSettings(periods_by_country_category=periods_by_country_category),
+        catalog=CatalogSettings(enabled_category_codes_by_country=enabled_category_codes_by_country),
         payment=PaymentSettings(
             bank_name=os.getenv("PAYMENT_BANK_NAME", "Bank"),
             card_number=os.getenv("PAYMENT_CARD_NUMBER", "0000 0000 0000 0000"),

@@ -55,6 +55,46 @@ def test_deactivate_categories_not_in_with_empty_list_deactivates_all(conn):
     assert len(catalog_repo.list_categories(conn, active_only=False)) == 1
 
 
+def test_list_categories_allowed_codes_none_is_unrestricted(conn):
+    """None (the default) must behave exactly as before this param existed
+    -- this is what keeps Georgia's category list untouched."""
+    catalog_repo.upsert_category(conn, external_id=7, code="passenger_car", name="Легковой", icon=None)
+    catalog_repo.upsert_category(conn, external_id=10, code="motorcycle", name="Мотоцикл", icon=None)
+    conn.commit()
+
+    codes = {c.code for c in catalog_repo.list_categories(conn, allowed_codes=None)}
+    assert codes == {"passenger_car", "motorcycle"}
+
+
+def test_list_categories_allowed_codes_filters_to_the_given_set(conn):
+    catalog_repo.upsert_category(conn, external_id=7, code="passenger_car", name="Легковой", icon=None)
+    catalog_repo.upsert_category(conn, external_id=10, code="motorcycle", name="Мотоцикл", icon=None)
+    conn.commit()
+
+    categories = catalog_repo.list_categories(conn, allowed_codes=["passenger_car"])
+    assert [c.code for c in categories] == ["passenger_car"]
+
+
+def test_list_categories_allowed_codes_empty_list_returns_nothing(conn):
+    """An explicit empty list is a real "nothing enabled" state, distinct
+    from None (unrestricted) -- and must not hit the invalid `code IN ()`
+    SQL some other list-filtering helpers in this module have to guard
+    against (see deactivate_categories_not_in)."""
+    catalog_repo.upsert_category(conn, external_id=7, code="passenger_car", name="Легковой", icon=None)
+    conn.commit()
+    assert catalog_repo.list_categories(conn, allowed_codes=[]) == []
+
+
+def test_list_categories_allowed_codes_still_respects_active_only(conn):
+    catalog_repo.upsert_category(conn, external_id=7, code="passenger_car", name="Легковой", icon=None)
+    conn.commit()
+    catalog_repo.deactivate_categories_not_in(conn, [])
+    conn.commit()
+
+    assert catalog_repo.list_categories(conn, allowed_codes=["passenger_car"]) == []
+    assert len(catalog_repo.list_categories(conn, allowed_codes=["passenger_car"], active_only=False)) == 1
+
+
 def test_deactivate_manufacturers_not_in_with_empty_list_deactivates_all(conn):
     catalog_repo.upsert_manufacturer(conn, external_id=12, name="BMW", is_popular=True)
     conn.commit()

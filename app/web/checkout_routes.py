@@ -71,6 +71,18 @@ def _draft_country_code(draft: dict | None) -> str:
     return country_code if country_code in SUPPORTED_COUNTRY_CODES else DEFAULT_COUNTRY_CODE
 
 
+def _allowed_category_codes(settings, country_code: str) -> list[str] | None:
+    """The single source of truth for "which internal vehicle_category_code
+    values does this country's checkout offer" (see
+    app.catalog.repository.list_categories's allowed_codes param, the only
+    consumer of this return value). None means unrestricted -- a country
+    absent from config.yaml's catalog.enabled_category_codes_by_country
+    (Georgia today) sees every active category exactly as before this
+    change; AM/TR are explicitly narrowed there instead of here, so enabling
+    more categories later is a config edit, never a code change."""
+    return settings.catalog.enabled_category_codes_by_country.get(country_code)
+
+
 def _require_draft_keys(draft: dict | None, keys: tuple[str, ...]) -> bool:
     if not draft:
         return False
@@ -113,7 +125,7 @@ def get_category_period(
     draft = get_draft(conn, session_id) or {}
     settings = get_settings()
     country_code = _draft_country_code(draft)
-    categories = catalog_repo.list_categories(conn)
+    categories = catalog_repo.list_categories(conn, allowed_codes=_allowed_category_codes(settings, country_code))
     selected_category = draft.get("vehicle_category_code") or "passenger_car"
     periods = available_periods(settings, country_code, selected_category)
     # Default to the first priced period only when nothing has been chosen
@@ -170,7 +182,15 @@ def post_category_period(
     draft = get_draft(conn, session_id) or {}
     settings = get_settings()
     country_code = _draft_country_code(draft)
+    allowed_codes = _allowed_category_codes(settings, country_code)
     category = catalog_repo.get_category_by_code(conn, category_code)
+    # A category can exist and be active in the catalog while still not
+    # being enabled for THIS country (e.g. "truck" for AM/TR right now) --
+    # treated identically to an unknown category, never a separate error
+    # message, so a tampered/stale POST can't smuggle in a category this
+    # country's checkout doesn't actually offer.
+    if category is not None and allowed_codes is not None and category.code not in allowed_codes:
+        category = None
     period = get_period(settings, country_code, category_code, period_code) if category else None
 
     error = None
@@ -182,7 +202,7 @@ def post_category_period(
         error = "Цена для этого периода пока не настроена — оформление временно недоступно"
 
     if error:
-        categories = catalog_repo.list_categories(conn)
+        categories = catalog_repo.list_categories(conn, allowed_codes=allowed_codes)
         periods = available_periods(settings, country_code, category_code)
         return render(
             request,
@@ -1181,7 +1201,9 @@ def get_edit_coverage(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     settings = get_settings()
-    categories = catalog_repo.list_categories(conn)
+    categories = catalog_repo.list_categories(
+        conn, allowed_codes=_allowed_category_codes(settings, order.country_code)
+    )
     periods = available_periods(settings, order.country_code, order.vehicle_category_code)
     return render(
         request,
@@ -1209,7 +1231,10 @@ def post_edit_coverage(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     settings = get_settings()
+    allowed_codes = _allowed_category_codes(settings, order.country_code)
     category = catalog_repo.get_category_by_code(conn, category_code)
+    if category is not None and allowed_codes is not None and category.code not in allowed_codes:
+        category = None
     period = get_period(settings, order.country_code, category_code, period_code) if category else None
 
     error = None
@@ -1221,7 +1246,7 @@ def post_edit_coverage(
         error = "Цена для этого периода пока не настроена — оформление временно недоступно"
 
     if error:
-        categories = catalog_repo.list_categories(conn)
+        categories = catalog_repo.list_categories(conn, allowed_codes=allowed_codes)
         periods = available_periods(settings, order.country_code, category_code)
         return render(
             request,
