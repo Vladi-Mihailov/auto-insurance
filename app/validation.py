@@ -7,9 +7,16 @@ numbers have no confirmed format at all yet. Validators return
 """
 
 import re
+from datetime import date
 
 IDENTIFIER_TYPES = ("vin", "chassis")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Deliberately generous, not a real automotive limit -- see
+# validate_engine_power's own docstring for why.
+_MAX_ENGINE_POWER_HP = 5000
+# Lenient floor, not a real product restriction -- see validate_model_year.
+_MIN_MODEL_YEAR = 1900
 
 
 def _collapse_spaces(value: str) -> str:
@@ -120,6 +127,70 @@ def validate_optional_email(raw: str) -> tuple[str | None, str | None]:
     if not _EMAIL_RE.match(value):
         return None, "Email: укажите корректный адрес"
     return value, None
+
+
+def validate_engine_power(raw: str) -> tuple[int | None, str | None]:
+    """Engine power in horsepower -- required for AM/TR vehicles (see
+    app.web.checkout_routes), never asked of Georgia. _MAX_ENGINE_POWER_HP
+    (5000) is deliberately generous, not a real automotive ceiling -- it
+    exists only to catch an obvious typo/garbage value (e.g. an accidental
+    extra digit), never to second-guess a real vehicle's true power,
+    matching this module's own lenient philosophy (see the module
+    docstring)."""
+    value = _collapse_spaces(raw)
+    if not value:
+        return None, "Мощность двигателя: заполните это поле"
+    try:
+        power = int(value)
+    except ValueError:
+        return None, "Мощность двигателя: укажите число в лошадиных силах"
+    if power <= 0:
+        return None, "Мощность двигателя: укажите число больше нуля"
+    if power > _MAX_ENGINE_POWER_HP:
+        return None, "Мощность двигателя: слишком большое значение"
+    return power, None
+
+
+def validate_model_year(raw: str, *, current_year: int) -> tuple[int | None, str | None]:
+    """Vehicle's model/manufacture year -- Turkey only (see
+    app.web.checkout_routes). _MIN_MODEL_YEAR (1900) is a lenient floor
+    ("cars didn't really exist before this"), not a real product
+    restriction -- wide enough to never reject a genuine (even vintage)
+    vehicle. The upper bound is current_year + 1, matching the automotive
+    industry's own practice of selling next year's model in advance;
+    current_year is supplied by the caller (see
+    app.dates.rules.today_in_georgia) rather than hardcoded here, so there
+    is exactly one place this ever needs updating: nowhere."""
+    value = _collapse_spaces(raw)
+    if not value:
+        return None, "Год выпуска: заполните это поле"
+    try:
+        year = int(value)
+    except ValueError:
+        return None, "Год выпуска: укажите год числом"
+    if year < _MIN_MODEL_YEAR:
+        return None, "Год выпуска: слишком раннее значение"
+    if year > current_year + 1:
+        return None, "Год выпуска: слишком позднее значение"
+    return year, None
+
+
+def validate_date_of_birth(raw: str, *, today: date) -> tuple[date | None, str | None]:
+    """Policyholder's own date of birth -- Turkey only (see
+    app.web.checkout_routes). No age restriction of any kind -- not
+    confirmed by any insurance requirement, so not invented here (same
+    no-guessing rule this module applies everywhere else) -- just a real
+    calendar date that isn't in the future."""
+    value = _collapse_spaces(raw)
+    if not value:
+        return None, "Дата рождения: заполните это поле"
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return None, "Дата рождения: некорректная дата"
+    if parsed > today:
+        return None, "Дата рождения: не может быть в будущем"
+    return parsed, None
 
 
 def validate_citizenship(raw: str) -> tuple[str | None, str | None]:

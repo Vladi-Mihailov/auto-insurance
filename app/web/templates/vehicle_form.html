@@ -74,6 +74,22 @@
       <span class="step__hint">Если не удалось найти модель — выберите „Other“.</span>
     </div>
 
+    {% if requires_engine_power %}
+    <label class="field">
+      <span class="field__label">Мощность двигателя, л.с.</span>
+      <input type="number" name="engine_power" value="{{ values.engine_power or '' }}" min="1" placeholder="150" autocomplete="off" required>
+      {% if errors.engine_power %}<span class="field__error">{{ errors.engine_power }}</span>{% endif %}
+    </label>
+    {% endif %}
+
+    {% if requires_model_year %}
+    <label class="field">
+      <span class="field__label">Год выпуска</span>
+      <input type="number" name="model_year" value="{{ values.model_year or '' }}" placeholder="2020" autocomplete="off" required>
+      {% if errors.model_year %}<span class="field__error">{{ errors.model_year }}</span>{% endif %}
+    </label>
+    {% endif %}
+
     <div class="step-nav">
       <a href="{{ back_url }}" class="btn btn--ghost btn--lg">Назад</a>
       <button type="submit" class="btn btn--primary btn--lg">Далее</button>

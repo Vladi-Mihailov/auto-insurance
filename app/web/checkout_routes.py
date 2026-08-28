@@ -30,9 +30,12 @@ from app.sessions.repository import clear_draft, get_draft, merge_draft
 from app.validation import (
     validate_citizenship,
     validate_contacts_form,
+    validate_date_of_birth,
     validate_driver_form,
+    validate_engine_power,
     validate_full_name,
     validate_identification_number,
+    validate_model_year,
     validate_owner_form,
     validate_vehicle_details_form,
 )
@@ -93,6 +96,22 @@ def _allowed_category_codes(settings, country_code: str) -> list[str] | None:
     change; AM/TR are explicitly narrowed there instead of here, so enabling
     more categories later is a config edit, never a code change."""
     return settings.catalog.enabled_category_codes_by_country.get(country_code)
+
+
+# Single source of truth for "which country requires which of the new
+# AM/TR-only fields" (see the gap-analysis report's field matrix) -- every
+# route that shows, validates, or persists these fields goes through these
+# three, never a hardcoded country check duplicated per route/template.
+def _requires_engine_power(country_code: str) -> bool:
+    return country_code in ("AM", "TR")
+
+
+def _requires_model_year(country_code: str) -> bool:
+    return country_code == "TR"
+
+
+def _requires_date_of_birth(country_code: str) -> bool:
+    return country_code == "TR"
 
 
 def _duration_range(settings, country_code: str, category_code: str) -> DurationRange | None:
@@ -803,7 +822,15 @@ def post_documents_upload(
 
 
 def _vehicle_form_context(
-    *, values: dict, errors: dict, form_action: str, manufacturer_name: str | None, model_name: str | None, steps: list, back_url: str
+    *,
+    values: dict,
+    errors: dict,
+    form_action: str,
+    manufacturer_name: str | None,
+    model_name: str | None,
+    steps: list,
+    back_url: str,
+    country_code: str,
 ) -> dict:
     return {
         "values": values,
@@ -813,6 +840,9 @@ def _vehicle_form_context(
         "model_name": model_name,
         "steps": steps,
         "back_url": back_url,
+        "country_code": country_code,
+        "requires_engine_power": _requires_engine_power(country_code),
+        "requires_model_year": _requires_model_year(country_code),
     }
 
 
@@ -894,6 +924,7 @@ def get_vehicle(
             model_name=model_name,
             steps=build_draft_steps(draft, 4),
             back_url="/method",
+            country_code=_draft_country_code(draft),
         ),
     )
 
@@ -906,6 +937,8 @@ def post_vehicle(
     identifier: str = Form(""),
     manufacturer_id: str = Form(""),
     model_id: str = Form(""),
+    engine_power: str = Form(""),
+    model_year: str = Form(""),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -913,6 +946,7 @@ def post_vehicle(
     if not _require_draft_keys(draft, ("start_date", "end_date")):
         return _redirect("/date")
 
+    country_code = _draft_country_code(draft)
     form = {
         "registration_number": registration_number,
         "identifier_type": identifier_type,
@@ -924,6 +958,21 @@ def post_vehicle(
         _resolve_catalog_selection(conn, manufacturer_id, model_id)
     )
     errors.update(catalog_errors)
+
+    # Country-aware, server-side -- never trust the HTML `required` alone.
+    # GE never asks for either field, so both stay None regardless of
+    # whatever a tampered/stale submission happened to include.
+    engine_power_clean = None
+    if _requires_engine_power(country_code):
+        engine_power_clean, engine_power_error = validate_engine_power(engine_power)
+        if engine_power_error:
+            errors["engine_power"] = engine_power_error
+
+    model_year_clean = None
+    if _requires_model_year(country_code):
+        model_year_clean, model_year_error = validate_model_year(model_year, current_year=today_in_georgia().year)
+        if model_year_error:
+            errors["model_year"] = model_year_error
 
     if errors:
         return render(
@@ -937,6 +986,8 @@ def post_vehicle(
                     "data_entry_method": draft.get("data_entry_method"),
                     "ocr_manufacturer_hint": draft.get("ocr_manufacturer_hint"),
                     "ocr_model_hint": draft.get("ocr_model_hint"),
+                    "engine_power": engine_power,
+                    "model_year": model_year,
                 },
                 errors=errors,
                 form_action="/vehicle",
@@ -944,6 +995,7 @@ def post_vehicle(
                 model_name=None,
                 steps=build_draft_steps(draft, 4),
                 back_url="/method",
+                country_code=country_code,
             ),
             status_code=422,
         )
@@ -962,6 +1014,8 @@ def post_vehicle(
             "identifier": clean["identifier"],
             "manufacturer_id": resolved_manufacturer_id,
             "model_id": resolved_model_id,
+            "engine_power": engine_power_clean,
+            "model_year": model_year_clean,
         },
     )
     log_event(conn, session_id=session_id, order_id=None, event_name="vehicle_data_completed")
@@ -1096,6 +1150,8 @@ def _policyholder_context(
     form_action: str,
     back_url: str,
     submit_label: str,
+    country_code: str,
+    date_of_birth: str = "",
 ) -> dict:
     return {
         "errors": errors,
@@ -1110,6 +1166,8 @@ def _policyholder_context(
         "form_action": form_action,
         "back_url": back_url,
         "submit_label": submit_label,
+        "date_of_birth": date_of_birth,
+        "requires_date_of_birth": _requires_date_of_birth(country_code),
     }
 
 
@@ -1143,6 +1201,7 @@ def get_policyholder(
             form_action="/policyholder",
             back_url="/vehicle",
             submit_label="Продолжить",
+            country_code=_draft_country_code(draft),
         ),
     )
 
@@ -1171,6 +1230,7 @@ def post_policyholder(
     owner_citizenship: str = Form(""),
     owner_phone: str = Form(""),
     owner_email: str = Form(""),
+    date_of_birth: str = Form(""),
     session_id: str = Depends(get_session_id),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -1192,6 +1252,7 @@ def post_policyholder(
         log_event(conn, session_id=session_id, order_id=None, event_name="order_blocked_no_price")
         return _redirect("/category-period")
 
+    country_code = _draft_country_code(draft)
     submitted_contacts = {
         "contact_email": contact_email,
         "contact_telegram": contact_telegram,
@@ -1234,6 +1295,15 @@ def post_policyholder(
     if citizenship_error:
         errors["citizenship"] = citizenship_error
 
+    # Country-aware, server-side -- never trust the HTML `required` alone.
+    # GE/AM never ask for this, so it stays None regardless of whatever a
+    # tampered/stale submission happened to include.
+    clean_dob = None
+    if _requires_date_of_birth(country_code):
+        clean_dob, dob_error = validate_date_of_birth(date_of_birth, today=today_in_georgia())
+        if dob_error:
+            errors["date_of_birth"] = dob_error
+
     if errors:
         return render(
             request,
@@ -1250,6 +1320,8 @@ def post_policyholder(
                 form_action="/policyholder",
                 back_url="/vehicle",
                 submit_label="Продолжить",
+                country_code=country_code,
+                date_of_birth=date_of_birth,
             ),
             status_code=422,
         )
@@ -1267,7 +1339,7 @@ def post_policyholder(
     order = create_order(
         conn,
         session_id=session_id,
-        country_code=_draft_country_code(draft),
+        country_code=country_code,
         vehicle_category_code=draft["vehicle_category_code"],
         period_code=draft["period_code"],
         start_date=date.fromisoformat(draft["start_date"]),
@@ -1291,6 +1363,9 @@ def post_policyholder(
         contact_other=clean_contacts["contact_other"],
         customer_currency="RUB",
         purchase_currency="GEL",
+        engine_power=draft.get("engine_power"),
+        model_year=draft.get("model_year"),
+        date_of_birth=clean_dob,
         **driver_clean,
         **owner_clean,
     )
@@ -1332,6 +1407,8 @@ def get_edit_vehicle(
                 "identifier": order.display_identifier,
                 "manufacturer_id": order.manufacturer_id,
                 "model_id": order.model_id,
+                "engine_power": order.engine_power,
+                "model_year": order.model_year,
             },
             errors={},
             form_action=f"/o/{order.resume_token}/edit-vehicle",
@@ -1339,6 +1416,7 @@ def get_edit_vehicle(
             model_name=model_name,
             steps=build_order_steps(order, 4),
             back_url=f"/o/{order.resume_token}/summary",
+            country_code=order.country_code,
         ),
     )
 
@@ -1352,6 +1430,8 @@ def post_edit_vehicle(
     identifier: str = Form(""),
     manufacturer_id: str = Form(""),
     model_id: str = Form(""),
+    engine_power: str = Form(""),
+    model_year: str = Form(""),
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -1367,18 +1447,37 @@ def post_edit_vehicle(
     )
     errors.update(catalog_errors)
 
+    engine_power_clean = None
+    if _requires_engine_power(order.country_code):
+        engine_power_clean, engine_power_error = validate_engine_power(engine_power)
+        if engine_power_error:
+            errors["engine_power"] = engine_power_error
+
+    model_year_clean = None
+    if _requires_model_year(order.country_code):
+        model_year_clean, model_year_error = validate_model_year(model_year, current_year=today_in_georgia().year)
+        if model_year_error:
+            errors["model_year"] = model_year_error
+
     if errors:
         return render(
             request,
             "vehicle_form.html",
             _vehicle_form_context(
-                values={**form, "manufacturer_id": manufacturer_id, "model_id": model_id},
+                values={
+                    **form,
+                    "manufacturer_id": manufacturer_id,
+                    "model_id": model_id,
+                    "engine_power": engine_power,
+                    "model_year": model_year,
+                },
                 errors=errors,
                 form_action=f"/o/{resume_token}/edit-vehicle",
                 manufacturer_name=manufacturer_name,
                 model_name=None,
                 steps=build_order_steps(order, 4),
                 back_url=f"/o/{resume_token}/summary",
+                country_code=order.country_code,
             ),
             status_code=422,
         )
@@ -1393,6 +1492,8 @@ def post_edit_vehicle(
         manufacturer_name=manufacturer_name,
         model_id=resolved_model_id,
         model_name=model_name,
+        engine_power=engine_power_clean,
+        model_year=model_year_clean,
     )
     return _redirect(f"/o/{resume_token}/summary")
 
@@ -1626,6 +1727,8 @@ def get_edit_policyholder(
             form_action=f"/o/{order.resume_token}/edit-policyholder",
             back_url=f"/o/{order.resume_token}/summary",
             submit_label="Сохранить",
+            country_code=order.country_code,
+            date_of_birth=order.date_of_birth.isoformat() if order.date_of_birth else "",
         ),
     )
 
@@ -1655,6 +1758,7 @@ def post_edit_policyholder(
     owner_citizenship: str = Form(""),
     owner_phone: str = Form(""),
     owner_email: str = Form(""),
+    date_of_birth: str = Form(""),
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -1700,6 +1804,12 @@ def post_edit_policyholder(
     if citizenship_error:
         errors["citizenship"] = citizenship_error
 
+    clean_dob = None
+    if _requires_date_of_birth(order.country_code):
+        clean_dob, dob_error = validate_date_of_birth(date_of_birth, today=today_in_georgia())
+        if dob_error:
+            errors["date_of_birth"] = dob_error
+
     if errors:
         return render(
             request,
@@ -1716,6 +1826,8 @@ def post_edit_policyholder(
                 form_action=f"/o/{resume_token}/edit-policyholder",
                 back_url=f"/o/{resume_token}/summary",
                 submit_label="Сохранить",
+                country_code=order.country_code,
+                date_of_birth=date_of_birth,
             ),
             status_code=422,
         )
@@ -1731,6 +1843,7 @@ def post_edit_policyholder(
         contact_phone=clean_contacts["contact_phone"],
         contact_max=clean_contacts["contact_max"],
         contact_other=clean_contacts["contact_other"],
+        date_of_birth=clean_dob,
         **driver_clean,
         **owner_clean,
     )

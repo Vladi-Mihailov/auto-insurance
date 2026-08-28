@@ -346,6 +346,7 @@ def test_am_order_creation_is_blocked_without_a_price_and_creates_no_order(real_
             "identifier": "JT123456789012345",
             "manufacturer_id": str(_manufacturer_id),
             "model_id": str(_model_id),
+            "engine_power": "150",  # required for AM as of Step 4
         },
     )
 

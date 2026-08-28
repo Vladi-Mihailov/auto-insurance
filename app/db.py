@@ -147,6 +147,14 @@ _ORDER_COLUMN_MIGRATIONS = [
     ("owner_citizenship", "TEXT"),  # individual only; NULL for legal entities
     ("owner_phone", "TEXT"),
     ("owner_email", "TEXT"),
+    # Country-specific vehicle/policyholder fields (AM/TR only -- see
+    # app.web.checkout_routes) -- all NULL for Georgia and for every order
+    # created before this migration. engine_power/model_year are integers
+    # (horsepower / calendar year); date_of_birth is stored as an ISO date
+    # string, same convention as start_date/end_date (see Order.from_row).
+    ("engine_power", "INTEGER"),
+    ("model_year", "INTEGER"),
+    ("date_of_birth", "TEXT"),
 ]
 
 # NULL means "this manufacturer's models have never been synced" — distinct

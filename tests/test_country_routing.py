@@ -265,8 +265,14 @@ def test_order_created_from_tr_draft_has_country_code_tr():
     client.get("/start", params={"country": "TR"}, follow_redirects=False)
     _seed_full_draft(client, country_code="TR")
 
+    # TR requires date_of_birth at /policyholder as of Step 4 (see
+    # tests/test_country_fields.py for full coverage of that requirement) --
+    # supplied directly here since this test's own job is only to prove
+    # country_code reaches the Order, not to re-test field requirements.
     response = client.post(
-        "/policyholder", data=valid_policyholder_data(contact_telegram="@tr_test"), follow_redirects=False
+        "/policyholder",
+        data=valid_policyholder_data(contact_telegram="@tr_test", date_of_birth="1990-05-20"),
+        follow_redirects=False,
     )
     assert response.status_code == 303
     resume_token = response.headers["location"].split("/")[2]

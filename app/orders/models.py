@@ -36,6 +36,13 @@ class Order:
     identifier: str | None
     data_entry_method: str | None
 
+    # Country-specific vehicle/policyholder fields (AM/TR only — see
+    # app.web.checkout_routes/app.validation). Always None for Georgia and
+    # for any order created before this migration; never required there.
+    engine_power: int | None  # horsepower — AM + TR
+    model_year: int | None  # TR only
+    date_of_birth: date | None  # policyholder's own DOB — TR only
+
     # Legacy free-text vehicle fields — kept only so orders created before
     # this migration keep reading back correctly (see summary.html's
     # fallback). New orders leave these NULL; never write to them.
@@ -105,6 +112,9 @@ class Order:
             identifier_type=row["identifier_type"],
             identifier=row["identifier"],
             data_entry_method=row["data_entry_method"],
+            engine_power=row["engine_power"],
+            model_year=row["model_year"],
+            date_of_birth=date.fromisoformat(row["date_of_birth"]) if row["date_of_birth"] else None,
             vehicle_make=row["vehicle_make"],
             vehicle_model=row["vehicle_model"],
             vin=row["vin"],

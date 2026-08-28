@@ -154,6 +154,9 @@ def _make_order(**overrides) -> Order:
         owner_citizenship=None,
         owner_phone=None,
         owner_email=None,
+        engine_power=None,
+        model_year=None,
+        date_of_birth=None,
     )
     values.update(overrides)
     return Order(**values)

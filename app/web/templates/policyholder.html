@@ -40,6 +40,14 @@
       {% if errors.citizenship %}<span class="field__error">{{ errors.citizenship }}</span>{% endif %}
     </label>
 
+    {% if requires_date_of_birth %}
+    <label class="field">
+      <span class="field__label">Дата рождения</span>
+      <input type="date" name="date_of_birth" value="{{ date_of_birth or '' }}" autocomplete="off" required>
+      {% if errors.date_of_birth %}<span class="field__error">{{ errors.date_of_birth }}</span>{% endif %}
+    </label>
+    {% endif %}
+
     <span class="field__label">Контакт</span>
     <div class="contact-block">
       <div class="contact-row">

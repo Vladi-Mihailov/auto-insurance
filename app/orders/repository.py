@@ -63,6 +63,9 @@ def create_order(
     owner_citizenship: str | None = None,
     owner_phone: str | None = None,
     owner_email: str | None = None,
+    engine_power: int | None = None,
+    model_year: int | None = None,
+    date_of_birth: date | None = None,
 ) -> Order:
     """Creates an order already holding the full pre-order draft: category,
     period, dates, price, vehicle catalog data and the policyholder's
@@ -96,8 +99,9 @@ def create_order(
             driver_same_as_policyholder, driver_full_name, driver_identifier, driver_citizenship, driver_phone, driver_email,
             owner_same_as_policyholder, owner_entity_type, owner_full_name, owner_identifier, owner_citizenship, owner_phone, owner_email,
             customer_currency, purchase_currency,
+            engine_power, model_year, date_of_birth,
             resume_token, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "",  # public_number filled in below once we have the id
@@ -140,6 +144,9 @@ def create_order(
             owner_email,
             customer_currency,
             purchase_currency,
+            engine_power,
+            model_year,
+            date_of_birth.isoformat() if date_of_birth else None,
             resume_token,
             now,
             now,
@@ -288,6 +295,7 @@ def update_policyholder(
     owner_citizenship: str | None = None,
     owner_phone: str | None = None,
     owner_email: str | None = None,
+    date_of_birth: date | None = None,
 ) -> None:
     """Post-order edit of the policyholder's name/identity/contacts plus
     driver/owner (see /o/{token}/edit-policyholder). Legal-entity
@@ -295,13 +303,16 @@ def update_policyholder(
     individual fields for the policyholder itself (owner_entity_type is a
     separate, owner-only concept). Never writes the legacy contact_type/
     contact_value columns -- those exist only for orders created before the
-    multi-field contact migration (see app.orders.models.Order.contact_rows)."""
+    multi-field contact migration (see app.orders.models.Order.contact_rows).
+    date_of_birth is TR-only (see app.validation.validate_date_of_birth);
+    always None for GE/AM."""
     conn.execute(
         """
         UPDATE insurance_orders
         SET full_name = ?, identification_number = ?, citizenship = ?, contact_email = ?, contact_telegram = ?, contact_phone = ?, contact_max = ?, contact_other = ?,
             driver_same_as_policyholder = ?, driver_full_name = ?, driver_identifier = ?, driver_citizenship = ?, driver_phone = ?, driver_email = ?,
             owner_same_as_policyholder = ?, owner_entity_type = ?, owner_full_name = ?, owner_identifier = ?, owner_citizenship = ?, owner_phone = ?, owner_email = ?,
+            date_of_birth = ?,
             updated_at = ?
         WHERE id = ?
         """,
@@ -327,6 +338,7 @@ def update_policyholder(
             owner_citizenship,
             owner_phone,
             owner_email,
+            date_of_birth.isoformat() if date_of_birth else None,
             _now(),
             order_id,
         ),
@@ -345,15 +357,19 @@ def update_vehicle_fields(
     manufacturer_name: str,
     model_id: int,
     model_name: str,
+    engine_power: int | None = None,
+    model_year: int | None = None,
 ) -> None:
     """See create_order's docstring re: vehicle_make/vehicle_model as a
     snapshot — editing vehicle data re-snapshots the new manufacturer/model
-    name at the time of the edit, same rule as at creation."""
+    name at the time of the edit, same rule as at creation. engine_power/
+    model_year are AM/TR-only (see app.validation); always None for GE."""
     conn.execute(
         """
         UPDATE insurance_orders
         SET car_number = ?, identifier_type = ?, identifier = ?,
             manufacturer_id = ?, vehicle_make = ?, model_id = ?, vehicle_model = ?,
+            engine_power = ?, model_year = ?,
             updated_at = ?
         WHERE id = ?
         """,
@@ -365,6 +381,8 @@ def update_vehicle_fields(
             manufacturer_name,
             model_id,
             model_name,
+            engine_power,
+            model_year,
             _now(),
             order_id,
         ),

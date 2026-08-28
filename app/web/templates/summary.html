@@ -28,6 +28,18 @@
         <span class="summary-card__label">Производитель / модель</span>
         <span>{{ manufacturer_name }} {{ model_name }}</span>
       </div>
+      {% if order.engine_power %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Мощность двигателя</span>
+        <span>{{ order.engine_power }} л.с.</span>
+      </div>
+      {% endif %}
+      {% if order.model_year %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Год выпуска</span>
+        <span>{{ order.model_year }}</span>
+      </div>
+      {% endif %}
     </div>
 
     <div class="summary-section">
@@ -58,6 +70,12 @@
         <span class="summary-card__label">ФИО</span>
         <span>{{ order.full_name }}</span>
       </div>
+      {% if order.date_of_birth %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Дата рождения</span>
+        <span>{{ order.date_of_birth.strftime('%d.%m.%Y') }}</span>
+      </div>
+      {% endif %}
       {% if order.identification_number %}
       <div class="summary-card__row">
         <span class="summary-card__label">Идентификационный номер</span>
