@@ -131,8 +131,9 @@ pricing:
   # confirmed (they are NOT assumed to be the same 5 periods).
   #
   # 30d RUB price confirmed by business on 2026-08-29 -- first real TR
-  # price. 45d/90d/180d/365d remain intentionally unpriced (null) until
-  # business confirms them; do not guess/interpolate a number for them.
+  # price. 45d/90d confirmed shortly after, same session. 180d/365d remain
+  # intentionally unpriced (null) until business confirms them; do not
+  # guess/interpolate a number for them.
   TR:
     passenger_car:
       - code: "30d"
@@ -140,10 +141,10 @@ pricing:
         price_rub: 2299
       - code: "45d"
         label: "45 дней"
-        price_rub: null
+        price_rub: 2999
       - code: "90d"
         label: "90 дней"
-        price_rub: null
+        price_rub: 3999
       - code: "180d"
         label: "180 дней"
         price_rub: null

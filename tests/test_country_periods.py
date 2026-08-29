@@ -257,22 +257,22 @@ def test_tr_periods_exactly_30_45_90_180_365(real_config):
 
 
 def test_tr_api_periods_only_returns_priced_periods(real_config):
-    """Customer-facing: only 30d (priced) is offered -- 45d/90d/180d/365d
+    """Customer-facing: 30d/45d/90d (priced) are offered -- 180d/365d
     stay configured (see the test above) but are never selectable."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     codes = [p["code"] for p in response.json()]
-    assert codes == ["30d"]
+    assert codes == ["30d", "45d", "90d"]
 
 
 def test_tr_selected_period_survives_into_date_step_via_seeded_draft(real_config):
-    """TR has no price yet, so /category-period always blocks a real
-    submission (see test_country_categories.py) -- this seeds the draft
-    directly (country_code=TR, period_code=45d + dates) to isolate and
-    verify the DATE RULE dispatch itself: /date must resolve TR's own
-    FixedDurationDateRule, not silently fall back to GeorgiaDateRule (which
-    doesn't even recognize "45d")."""
+    """45d is priced now (see test_tr_45_90_now_priced_180_365_remain_unselectable),
+    but this still seeds the draft directly rather than going through
+    /category-period, to isolate and verify the DATE RULE dispatch itself in
+    its own right: /date must resolve TR's own FixedDurationDateRule, not
+    silently fall back to GeorgiaDateRule (which doesn't even recognize
+    "45d")."""
     client = TestClient(app)
     _start(client, "TR")
     _seed_draft(client, vehicle_category_code="passenger_car", period_code="45d")
@@ -463,13 +463,22 @@ def test_tr_30d_is_now_priced_and_selectable(real_config):
     assert periods["30d"]["price_rub"] == 2299
 
 
-def test_tr_45_90_180_365_remain_unpriced_and_unselectable(real_config):
+def test_tr_45_90_now_priced_180_365_remain_unselectable(real_config):
     client = TestClient(app)
     _start(client, "TR")
-    for code in ("45d", "90d", "180d", "365d"):
+    for code in ("180d", "365d"):
         response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": code})
         assert response.status_code == 422, code
         assert "Цена для этого периода пока не настроена" in response.text, code
+
+    for code, expected_minor in (("45d", 299900), ("90d", 399900)):
+        response = client.post(
+            "/category-period", data={"category_code": "passenger_car", "period_code": code}, follow_redirects=False
+        )
+        assert response.status_code == 303, code
+        draft = _read_draft(client)
+        assert draft["period_code"] == code
+        assert draft["price_customer_minor"] == expected_minor, code
 
 
 def test_tr_30d_category_period_submission_now_succeeds(real_config):
@@ -538,6 +547,78 @@ def test_tr_30d_price_flows_through_draft_order_summary_and_payment(real_config)
     assert "2 299" in payment.text
 
 
+@pytest.mark.parametrize(
+    "period_code,expected_minor,expected_price_text,duration_days",
+    [
+        ("45d", 299900, "2 999", 45),
+        ("90d", 399900, "3 999", 90),
+    ],
+)
+def test_tr_45d_and_90d_full_flow(real_config, period_code, expected_minor, expected_price_text, duration_days):
+    """Same round-trip as 30d above, now that 45d (2999 RUB) and 90d (3999
+    RUB) are also confirmed prices -- including the exact end_date TR's own
+    FixedDurationDateRule computes for each (start + N days, no month-based
+    math involved for either)."""
+    from app.orders.repository import get_order_by_token
+    from policyholder_helpers import valid_policyholder_data
+
+    client = TestClient(app)
+    _start(client, "TR")
+    response = client.post(
+        "/category-period",
+        data={"category_code": "passenger_car", "period_code": period_code},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/date"
+    draft = _read_draft(client)
+    assert draft["price_customer_minor"] == expected_minor
+
+    client.post("/date", data={"start_date": _iso(0)}, follow_redirects=False)
+    draft = _read_draft(client)
+    assert draft["end_date"] == _iso(duration_days)
+
+    client.post("/method", data={"choice": "manual"})
+    client.post(
+        "/vehicle",
+        data={
+            "registration_number": f"TR{period_code.upper()}AA",
+            "identifier_type": "vin",
+            "identifier": "JT123456789012345",
+            "manufacturer_id": str(_manufacturer_id),
+            "model_id": str(_model_id),
+            "engine_power": "150",
+            "model_year": "2020",
+        },
+    )
+    response = client.post(
+        "/policyholder",
+        data=valid_policyholder_data(contact_telegram=f"@tr_{period_code}_price", date_of_birth="1990-05-20"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    resume_token = response.headers["location"].split("/")[2]
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        order = get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+    assert order.country_code == "TR"
+    assert order.period_code == period_code
+    assert order.price_customer_minor == expected_minor
+    assert order.end_date.isoformat() == _iso(duration_days)
+
+    summary = client.get(f"/o/{resume_token}/summary")
+    assert summary.status_code == 200
+    assert expected_price_text in summary.text
+
+    client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
+    payment = client.get(f"/o/{resume_token}/payment")
+    assert payment.status_code == 200
+    assert expected_price_text in payment.text
+
+
 def test_tr_full_flow_starting_from_the_actual_homepage_link(real_config):
     """Public TR launch: the homepage card's own href (not a hand-typed
     /start?country=TR) is what's followed here, all the way to a paid-
@@ -595,3 +676,14 @@ def test_ge_pricing_unaffected_by_tr_30d_price(real_config):
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     periods = {p["code"]: p["price_rub"] for p in response.json()}
     assert periods == {"15d": 1349, "30d": 2149, "90d": 3649}
+
+
+def test_homepage_tr_teaser_stays_the_cheapest_priced_period(real_config):
+    """The homepage teaser is computed from whatever's actually priced
+    (see app.web.routes.landing -- min() over is_priced periods, never
+    hardcoded), so it must still read "от 2 299 ₽" now that 45d/90d are
+    also priced -- 2299 remains the cheapest of the three."""
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "от 2 299 ₽" in response.text
