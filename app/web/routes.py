@@ -28,7 +28,7 @@ from app.deps import get_db, get_order_or_404, get_session_id, get_settings
 from app.orders.models import Order
 from app.orders.repository import set_dates, set_period, set_status
 from app.orders.state_machine import OrderStatus
-from app.pricing.provider import available_periods, get_period
+from app.pricing.provider import available_periods, get_duration_range, get_period, resolve_duration_price
 from app.sessions.repository import merge_draft
 from app.web.checkout_routes import DEFAULT_COUNTRY_CODE, SUPPORTED_COUNTRY_CODES, _fixed_duration_date_rule
 from app.web.step_nav import build_order_steps
@@ -77,10 +77,28 @@ def landing(request: Request, session_id: str = Depends(get_session_id), conn: s
     tr_periods = available_periods(settings, "TR", "passenger_car")
     tr_priced = [p.price_rub for p in tr_periods if p.is_priced]
     tr_price_rub = min(tr_priced) if tr_priced else None
+    # Armenia: EXACT DATE RANGE product, no period list to take a min() over
+    # (see get_duration_range/resolve_duration_price) -- the cheapest
+    # possible price is always at min_days (the formula's daily rate is
+    # confirmed positive), computed through the SAME resolver the real
+    # checkout uses, so this teaser tracks reference prices/discount/
+    # min_days automatically instead of duplicating the formula here.
+    am_duration_range = get_duration_range(settings, "AM", "passenger_car")
+    am_price_minor = (
+        resolve_duration_price(settings, "AM", "passenger_car", am_duration_range.min_days)
+        if am_duration_range is not None
+        else None
+    )
+    am_price_rub = am_price_minor // 100 if am_price_minor is not None else None
     return render(
         request,
         "landing.html",
-        {"ge_price_rub": ge_price_rub, "tr_price_rub": tr_price_rub, "contacts": settings.contacts},
+        {
+            "ge_price_rub": ge_price_rub,
+            "am_price_rub": am_price_rub,
+            "tr_price_rub": tr_price_rub,
+            "contacts": settings.contacts,
+        },
     )
 
 

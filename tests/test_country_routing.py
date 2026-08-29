@@ -358,21 +358,26 @@ def test_landing_page_still_links_plainly_to_start_for_georgia():
     response = client.get("/")
     assert response.status_code == 200
     assert 'href="/start"' in response.text
-    assert "country=AM" not in response.text  # AM still not publicly launched
 
 
 def test_landing_page_turkey_now_links_to_country_aware_start():
     """Turkey is now publicly launched (see the TR-30d-pricing task) --
     supersedes the old "still routes to the operator" assumption for TR
-    specifically; AM is unaffected and still not launched."""
+    specifically."""
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
     assert 'href="/start?country=TR"' in response.text
 
 
-def test_landing_page_armenia_still_routes_to_the_operator_turkey_does_not():
+def test_landing_page_armenia_now_links_to_country_aware_start():
+    """Armenia is now publicly launched too (see the AM linear-pricing
+    task) -- supersedes the old "still routes to the operator" assumption;
+    the operator-only placeholder link is gone entirely now that all three
+    countries route through /start?country=... (see
+    tests/test_am_linear_pricing.py for the full homepage/teaser coverage)."""
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert response.text.count("Оформить через оператора") == 1  # AM only now
+    assert 'href="/start?country=AM"' in response.text
+    assert "Оформить через оператора" not in response.text

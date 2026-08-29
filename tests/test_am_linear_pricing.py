@@ -327,6 +327,54 @@ def test_am_edit_date_recalculates_price_and_updates_order_snapshot(real_config)
     assert updated_order.price_customer_minor == 309900  # 45d = 3099 RUB
 
 
+def test_am_edit_date_below_min_days_rejected_and_order_unchanged(real_config):
+    """Same boundary _parse_duration_range_dates already enforces at order
+    creation applies to edit-date too -- an out-of-range edit must be
+    rejected (422) and must leave the existing dates/price snapshot alone,
+    not partially update anything."""
+    from app.orders.repository import get_order_by_token
+    from policyholder_helpers import valid_policyholder_data
+
+    client = TestClient(app)
+    _start(client, "AM")
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
+    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(30)})
+    client.post("/method", data={"choice": "manual"})
+    client.post(
+        "/vehicle",
+        data={
+            "registration_number": "AMEDITOOB",
+            "identifier_type": "vin",
+            "identifier": "JT123456789012345",
+            "manufacturer_id": str(_manufacturer_id),
+            "model_id": str(_model_id),
+            "engine_power": "150",
+        },
+    )
+    response = client.post(
+        "/policyholder", data=valid_policyholder_data(contact_telegram="@am_edit_oob"), follow_redirects=False
+    )
+    resume_token = response.headers["location"].split("/")[2]
+
+    below_min = client.post(
+        f"/o/{resume_token}/edit-date", data={"start_date": _iso(0), "end_date": _iso(9)}
+    )
+    assert below_min.status_code == 422
+
+    above_max = client.post(
+        f"/o/{resume_token}/edit-date", data={"start_date": _iso(0), "end_date": _iso(366)}
+    )
+    assert above_max.status_code == 422
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        order = get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+    assert order.end_date.isoformat() == _iso(30)  # unchanged
+    assert order.price_customer_minor == 229900  # unchanged, 30d = 2299 RUB
+
+
 # ---------------------------------------------------------------------------
 # Regression: GE/TR pricing is untouched by AM's new linear model.
 # ---------------------------------------------------------------------------
@@ -351,3 +399,54 @@ def test_tr_pricing_unaffected_by_am_linear_pricing(real_config):
     all_codes = {p.code: p.price_rub for p in available_periods(get_settings(), "TR", "passenger_car")}
     assert all_codes["180d"] is None
     assert all_codes["365d"] is None
+
+
+# ---------------------------------------------------------------------------
+# Public homepage launch: Armenia card becomes an active link, teaser is
+# resolved via the SAME resolve_duration_price() the real checkout uses (see
+# app.web.routes.landing) -- never a second copy of the formula in the
+# template/route. GE/TR cards must stay exactly as they were.
+# ---------------------------------------------------------------------------
+
+
+def test_am_homepage_card_links_to_start_with_country_am(real_config):
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'href="/start?country=AM"' in response.text
+
+
+def test_am_homepage_no_longer_shows_the_operator_only_placeholder(real_config):
+    client = TestClient(app)
+    response = client.get("/")
+    assert "country-card__operator-link" not in response.text
+    assert "Оформить через оператора" not in response.text
+
+
+def test_am_homepage_teaser_shows_price_at_min_days(real_config):
+    """min_days=10 -> 1232 RUB (see test_am_control_prices_exact) -- the
+    teaser must show the SAME number the real /date step would compute for
+    a 10-day booking, proving app.web.routes.landing calls
+    resolve_duration_price() rather than hardcoding 1232."""
+    duration_range_config = get_settings().pricing.duration_ranges_by_country_category["AM"]["passenger_car"]
+    expected_minor = resolve_duration_price(get_settings(), "AM", "passenger_car", duration_range_config.min_days)
+    assert expected_minor == 123200  # sanity: still the control value from the formula
+
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "от 1 232 ₽" in response.text
+
+
+def test_ge_homepage_unaffected_by_am_public_launch(real_config):
+    client = TestClient(app)
+    response = client.get("/")
+    assert 'href="/start"' in response.text
+    assert "от 1 349 ₽" in response.text
+
+
+def test_tr_homepage_unaffected_by_am_public_launch(real_config):
+    client = TestClient(app)
+    response = client.get("/")
+    assert 'href="/start?country=TR"' in response.text
+    assert "от 2 299 ₽" in response.text
