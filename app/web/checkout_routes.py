@@ -260,13 +260,19 @@ def get_category_period(
         periods = []
         selected_period = None
     else:
-        periods = available_periods(settings, country_code, selected_category)
+        # Customer-facing display only shows periods that actually have a
+        # confirmed price -- an unpriced period (e.g. TR's 45d/90d/180d/365d
+        # right now) stays configured in config.yaml as future availability,
+        # but is never offered as a selectable tile. Server-side validation
+        # (post_category_period below) is unaffected by this filter -- it
+        # keeps resolving the period via get_period()/is_priced directly, so
+        # a POST for an unpriced period is still rejected exactly as before.
+        periods = [p for p in available_periods(settings, country_code, selected_category) if p.is_priced]
         # Default to the first priced period only when nothing has been
         # chosen yet — never overwrite a period the user (or an earlier
         # draft) already picked. Purely a display default: nothing is
         # written to the draft until the form is actually submitted.
-        priced = [p for p in periods if p.is_priced]
-        selected_period = draft.get("period_code") or (priced[0].code if priced else None)
+        selected_period = draft.get("period_code") or (periods[0].code if periods else None)
     return render(
         request,
         "category_period.html",
@@ -295,11 +301,15 @@ def get_periods_for_category(
     JSONResponse pattern as the existing date-preview endpoint. Country
     comes from the draft, same as every other step (see
     _draft_country_code) -- this now needs the session/db deps it didn't
-    before to read that draft."""
+    before to read that draft. Customer-facing, so only priced periods are
+    returned here -- same filter as the server-rendered category-period
+    screen (see get_category_period); this is what the browser actually
+    receives when switching category client-side, so it must stay
+    consistent with the initial server-rendered tiles."""
     settings = get_settings()
     draft = get_draft(conn, session_id)
     country_code = _draft_country_code(draft)
-    periods = available_periods(settings, country_code, category_code)
+    periods = [p for p in available_periods(settings, country_code, category_code) if p.is_priced]
     return JSONResponse(
         [{"code": p.code, "label": p.label, "price_rub": p.price_rub, "is_priced": p.is_priced} for p in periods]
     )
@@ -360,7 +370,11 @@ def post_category_period(
         # actually typed would have meant, same as the periods list below
         # already did before this change.
         redisplay_duration_range = _duration_range(settings, country_code, category_code)
-        periods = [] if redisplay_duration_range is not None else available_periods(settings, country_code, category_code)
+        periods = (
+            []
+            if redisplay_duration_range is not None
+            else [p for p in available_periods(settings, country_code, category_code) if p.is_priced]
+        )
         return render(
             request,
             "category_period.html",
@@ -1567,7 +1581,10 @@ def get_edit_coverage(
     categories = catalog_repo.list_categories(
         conn, allowed_codes=_allowed_category_codes(settings, order.country_code)
     )
-    periods = available_periods(settings, order.country_code, order.vehicle_category_code)
+    # Customer-facing, same filter as the pre-order screen (see
+    # get_category_period) -- an unpriced period must not reappear here
+    # just because the customer is editing an existing order.
+    periods = [p for p in available_periods(settings, order.country_code, order.vehicle_category_code) if p.is_priced]
     return render(
         request,
         "category_period.html",
@@ -1610,7 +1627,7 @@ def post_edit_coverage(
 
     if error:
         categories = catalog_repo.list_categories(conn, allowed_codes=allowed_codes)
-        periods = available_periods(settings, order.country_code, category_code)
+        periods = [p for p in available_periods(settings, order.country_code, category_code) if p.is_priced]
         return render(
             request,
             "category_period.html",

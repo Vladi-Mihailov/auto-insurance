@@ -245,12 +245,25 @@ def test_am_never_leaks_a_ge_period_code_into_the_draft(real_config):
 
 
 def test_tr_periods_exactly_30_45_90_180_365(real_config):
+    """Underlying AVAILABILITY (app.pricing.provider), not the
+    customer-facing /api/periods endpoint -- see
+    test_tr_api_periods_only_returns_priced_periods below for what the
+    browser actually receives now that 30d has a confirmed price."""
+    from app.pricing.provider import available_periods
+
+    codes = [p.code for p in available_periods(get_settings(), "TR", "passenger_car")]
+    assert codes == ["30d", "45d", "90d", "180d", "365d"]
+    assert "15d" not in codes  # no GE period leaking in
+
+
+def test_tr_api_periods_only_returns_priced_periods(real_config):
+    """Customer-facing: only 30d (priced) is offered -- 45d/90d/180d/365d
+    stay configured (see the test above) but are never selectable."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     codes = [p["code"] for p in response.json()]
-    assert codes == ["30d", "45d", "90d", "180d", "365d"]
-    assert "15d" not in codes  # no GE period leaking in
+    assert codes == ["30d"]
 
 
 def test_tr_selected_period_survives_into_date_step_via_seeded_draft(real_config):
@@ -518,6 +531,56 @@ def test_tr_30d_price_flows_through_draft_order_summary_and_payment(real_config)
     assert summary.status_code == 200
     assert "2 299" in summary.text
     assert "30 дней" in summary.text
+
+    client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
+    payment = client.get(f"/o/{resume_token}/payment")
+    assert payment.status_code == 200
+    assert "2 299" in payment.text
+
+
+def test_tr_full_flow_starting_from_the_actual_homepage_link(real_config):
+    """Public TR launch: the homepage card's own href (not a hand-typed
+    /start?country=TR) is what's followed here, all the way to a paid-
+    price-visible payment screen -- proves the whole chain end-to-end
+    rather than just the country-aware routing plumbing in isolation."""
+    from app.orders.repository import get_order_by_token
+    from policyholder_helpers import valid_policyholder_data
+
+    client = TestClient(app)
+    home = client.get("/")
+    assert 'href="/start?country=TR"' in home.text
+
+    client.get("/start?country=TR", follow_redirects=False)
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"}, follow_redirects=False)
+    client.post("/date", data={"start_date": _iso(0)})
+    client.post("/method", data={"choice": "manual"})
+    client.post(
+        "/vehicle",
+        data={
+            "registration_number": "TR911AA",
+            "identifier_type": "vin",
+            "identifier": "JT123456789012345",
+            "manufacturer_id": str(_manufacturer_id),
+            "model_id": str(_model_id),
+            "engine_power": "150",
+            "model_year": "2020",
+        },
+    )
+    response = client.post(
+        "/policyholder",
+        data=valid_policyholder_data(contact_telegram="@tr_from_homepage", date_of_birth="1990-05-20"),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    resume_token = response.headers["location"].split("/")[2]
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        order = get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+    assert order.country_code == "TR"
+    assert order.price_customer_minor == 229900
 
     client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
     payment = client.get(f"/o/{resume_token}/payment")

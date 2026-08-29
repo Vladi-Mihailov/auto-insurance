@@ -84,7 +84,7 @@
       </div>
     </div>
 
-    <div class="country-card country-card--soon">
+    <a class="country-card country-card--active" href="/start?country=TR">
       <div class="country-card__photo">
         <img src="/static/img/country-turkey.jpg?v=2" alt="" class="country-card__photo-img">
         <div class="country-card__photo-scrim" aria-hidden="true"></div>
@@ -93,10 +93,11 @@
       <div class="country-card__body">
         <span class="country-card__text">
           <span class="country-card__desc">ОСАГО для поездки в Турцию</span>
-          <a class="country-card__operator-link" href="#help">Оформить через оператора →</a>
+          {% if tr_price_rub %}<span class="country-card__price">от {{ tr_price_rub | rub }} ₽</span>{% endif %}
         </span>
+        <span class="country-card__arrow" aria-hidden="true">→</span>
       </div>
-    </div>
+    </a>
   </div>
 </section>
 

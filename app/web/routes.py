@@ -68,12 +68,19 @@ def landing(request: Request, session_id: str = Depends(get_session_id), conn: s
     log_event(conn, session_id=session_id, order_id=None, event_name="landing_view")
     settings = get_settings()
     ge_periods = available_periods(settings, "GE", "passenger_car")
-    priced = [p.price_rub for p in ge_periods if p.is_priced]
-    ge_price_rub = min(priced) if priced else None
+    ge_priced = [p.price_rub for p in ge_periods if p.is_priced]
+    ge_price_rub = min(ge_priced) if ge_priced else None
+    # Turkey is now publicly launched (see landing.html's active TR card) --
+    # same "cheapest priced period" teaser Georgia's own card already
+    # shows. AM stays unpriced/unlaunched, so no equivalent price is
+    # computed for it here.
+    tr_periods = available_periods(settings, "TR", "passenger_car")
+    tr_priced = [p.price_rub for p in tr_periods if p.is_priced]
+    tr_price_rub = min(tr_priced) if tr_priced else None
     return render(
         request,
         "landing.html",
-        {"ge_price_rub": ge_price_rub, "contacts": settings.contacts},
+        {"ge_price_rub": ge_price_rub, "tr_price_rub": tr_price_rub, "contacts": settings.contacts},
     )
 
 
