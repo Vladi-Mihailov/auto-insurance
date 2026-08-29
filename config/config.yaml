@@ -174,10 +174,25 @@ catalog:
 # here must NOT also appear under pricing.<country>.<category> above -- it's
 # one product model or the other, never both (see
 # app.pricing.provider.get_duration_range, checked before available_periods
-# everywhere this matters). Deliberately no price here at all -- see that
-# section's own comment on PRICE AVAILABILITY vs PERIOD AVAILABILITY.
+# everywhere this matters).
+#
+# pricing (linear daily price + percent discount) confirmed by business on
+# 2026-08-29: two reference points (15d=1499 RUB, 30d=2299 RUB) define a
+# straight RUB-per-day line, applied across the FULL 10-365 day range --
+# every individual day count is computed from the formula, never bucketed
+# into brackets, and days outside 15-30 are intentionally extrapolated, not
+# rejected. See app.pricing.provider.resolve_duration_price for the exact
+# rounding order (base price rounded first, then discount applied and
+# rounded again; ROUND_HALF_UP; Decimal/Fraction only, never float).
+# discount_percent: 0 means no discount is currently active.
 duration_ranges:
   AM:
     passenger_car:
       min_days: 10
       max_days: 365
+      pricing:
+        reference_days_1: 15
+        reference_price_rub_1: 1499
+        reference_days_2: 30
+        reference_price_rub_2: 2299
+        discount_percent: 0

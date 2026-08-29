@@ -331,13 +331,15 @@ def test_invalid_period_post_cannot_inject_a_ge_period_for_tr(real_config):
     assert "Выберите один из доступных периодов" in response.text
 
 
-def test_am_order_creation_is_blocked_without_a_price_and_creates_no_order(real_config):
-    """The price blocker (see the Step 3 report): a duration-range draft
-    with price_customer_minor=None must never reach create_order -- no
-    crash, no orphaned DB row, just a safe redirect back to the start of
-    the wizard. Drives the wizard all the way through /vehicle (real
-    manufacturer/model) so post_policyholder's manufacturer/model guard
-    doesn't intercept before the price guard gets a chance to."""
+def test_am_order_creation_now_succeeds_with_real_linear_pricing(real_config):
+    """AM passenger_car now has real linear pricing (see
+    tests/test_am_linear_pricing.py for the formula's own dedicated
+    coverage) -- the price guard in post_policyholder
+    (draft.get("price_customer_minor") is None) simply stops firing for AM,
+    exactly as documented there; it is not removed or weakened, it just has
+    nothing left to block for this (country, category) pair. Drives the
+    wizard all the way through /vehicle (real manufacturer/model) so
+    post_policyholder's manufacturer/model guard doesn't intercept first."""
     from policyholder_helpers import valid_policyholder_data
 
     conn = get_connection(_settings.app.db_file)
@@ -364,17 +366,27 @@ def test_am_order_creation_is_blocked_without_a_price_and_creates_no_order(real_
     )
 
     response = client.post(
-        "/policyholder", data=valid_policyholder_data(contact_telegram="@am_blocked"), follow_redirects=False
+        "/policyholder", data=valid_policyholder_data(contact_telegram="@am_priced"), follow_redirects=False
     )
     assert response.status_code == 303
-    assert response.headers["location"] == "/category-period"
+    assert response.headers["location"] != "/category-period"
 
     conn = get_connection(_settings.app.db_file)
     try:
         after_count = conn.execute("SELECT COUNT(*) FROM insurance_orders").fetchone()[0]
     finally:
         conn.close()
-    assert after_count == before_count  # no order created
+    assert after_count == before_count + 1  # order created, with a real price
+
+    resume_token = response.headers["location"].split("/")[2]
+    from app.orders.repository import get_order_by_token
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        order = get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+    assert order.price_customer_minor == 123200  # 10d = 1232 RUB, see test_am_linear_pricing.py
 
 
 # ---------------------------------------------------------------------------

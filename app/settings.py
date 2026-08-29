@@ -27,17 +27,35 @@ class PeriodConfig(BaseModel):
     price_rub: int | None = None
 
 
+class LinearDurationPricingConfig(BaseModel):
+    # Two reference points define a straight line (RUB per calendar day);
+    # base_price(duration_days) = reference_price_rub_1 +
+    # (duration_days - reference_days_1) * slope, where slope is the two
+    # points' rate of change. Applied across the WHOLE min_days..max_days
+    # range, including days outside [reference_days_1, reference_days_2] --
+    # that's an intentional business rule (extrapolation), not a bug -- see
+    # app.pricing.provider.resolve_duration_price, the only consumer.
+    reference_days_1: int
+    reference_price_rub_1: int
+    reference_days_2: int
+    reference_price_rub_2: int
+    # Applied to the rounded base price, in whole percent, 0-100. 0 (default)
+    # is a no-op.
+    discount_percent: int = 0
+
+
 class DurationRangeConfig(BaseModel):
     # EXACT DATE RANGE product (currently Armenia's foreign-vehicle CMTPL):
     # the customer picks start_date/end_date directly rather than choosing
     # from a fixed period list -- see app.pricing.provider.get_duration_range
     # and app.web.checkout_routes._parse_duration_range_dates, the only
-    # consumers. Deliberately has no price field at all: PRICE AVAILABILITY
-    # is a separate concern from PERIOD AVAILABILITY (see the GE/AM/TR
-    # gap-analysis report) -- a duration-range product has no
-    # PricingProvider yet, and this config never pretends otherwise.
+    # consumers.
     min_days: int
     max_days: int
+    # None means "period range exists, price NOT YET CONFIGURED" -- same
+    # not-a-number-guess rule as PeriodConfig.price_rub above -- see
+    # app.pricing.provider.resolve_duration_price.
+    pricing: LinearDurationPricingConfig | None = None
 
 
 class PricingSettings(BaseModel):

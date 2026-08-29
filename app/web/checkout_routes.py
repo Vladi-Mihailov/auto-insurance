@@ -25,7 +25,7 @@ from app.ocr.parser import build_candidates
 from app.ocr.provider import OcrProvider, OcrProviderError
 from app.orders.models import Order
 from app.orders.repository import create_order, set_dates, update_coverage, update_policyholder, update_vehicle_fields
-from app.pricing.provider import DurationRange, available_periods, get_duration_range, get_period
+from app.pricing.provider import DurationRange, available_periods, get_duration_range, get_period, resolve_duration_price
 from app.sessions.repository import clear_draft, get_draft, merge_draft
 from app.validation import (
     validate_citizenship,
@@ -601,7 +601,17 @@ def post_date_step(
             status_code=422,
         )
 
-    merge_draft(conn, session_id, {"start_date": parsed_start.isoformat(), "end_date": parsed_end.isoformat()})
+    duration_days = (parsed_end - parsed_start).days
+    price_customer_minor = resolve_duration_price(settings, country_code, draft["vehicle_category_code"], duration_days)
+    merge_draft(
+        conn,
+        session_id,
+        {
+            "start_date": parsed_start.isoformat(),
+            "end_date": parsed_end.isoformat(),
+            "price_customer_minor": price_customer_minor,
+        },
+    )
     return _redirect("/method")
 
 
@@ -1756,7 +1766,9 @@ def post_edit_date(
             status_code=422,
         )
 
-    set_dates(conn, order.id, start_date=parsed_start, end_date=parsed_end)
+    duration_days = (parsed_end - parsed_start).days
+    price_customer_minor = resolve_duration_price(settings, order.country_code, order.vehicle_category_code, duration_days)
+    set_dates(conn, order.id, start_date=parsed_start, end_date=parsed_end, price_customer_minor=price_customer_minor)
     return _redirect(f"/o/{resume_token}/summary")
 
 

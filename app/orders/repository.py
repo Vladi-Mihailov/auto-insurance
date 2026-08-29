@@ -259,14 +259,33 @@ def update_coverage(
     conn.commit()
 
 
-def set_dates(conn: sqlite3.Connection, order_id: int, *, start_date: date, end_date: date) -> None:
+def set_dates(
+    conn: sqlite3.Connection,
+    order_id: int,
+    *,
+    start_date: date,
+    end_date: date,
+    price_customer_minor: int | None = None,
+) -> None:
     """Used by the legacy /o/{token}/date route (pre-existing orders with no
     dates yet), by post-order /o/{token}/edit-date, and by /o/{token}/edit-
-    coverage (a period change recomputes end_date for the same start_date)."""
-    conn.execute(
-        "UPDATE insurance_orders SET start_date = ?, end_date = ?, updated_at = ? WHERE id = ?",
-        (start_date.isoformat(), end_date.isoformat(), _now(), order_id),
-    )
+    coverage (a period change recomputes end_date for the same start_date).
+
+    price_customer_minor defaults to None, meaning "leave the stored price
+    alone" -- every FIXED-period caller (GE/TR) relies on this default,
+    since their price is tied to period_code, not dates. Only an EXACT DATE
+    RANGE order's edit-date (see app.web.checkout_routes.post_edit_date)
+    passes a real recomputed value, updating dates and price atomically."""
+    if price_customer_minor is None:
+        conn.execute(
+            "UPDATE insurance_orders SET start_date = ?, end_date = ?, updated_at = ? WHERE id = ?",
+            (start_date.isoformat(), end_date.isoformat(), _now(), order_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE insurance_orders SET start_date = ?, end_date = ?, price_customer_minor = ?, updated_at = ? WHERE id = ?",
+            (start_date.isoformat(), end_date.isoformat(), price_customer_minor, _now(), order_id),
+        )
     conn.commit()
 
 
