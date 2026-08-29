@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Проверьте данные{% endblock %}
 {% block content %}
+{% set _country_titles = {"AM": "ОСАГО Армении", "TR": "ОСАГО Турции"} %}
 <section class="step">
-  <h1 class="step__title">ОСАГО Грузии</h1>
+  <h1 class="step__title">{{ _country_titles.get(order.country_code, "ОСАГО Грузии") }}</h1>
 
   <div class="summary-card">
     <div class="summary-section">
