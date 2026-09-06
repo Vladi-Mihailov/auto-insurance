@@ -1,4 +1,5 @@
-"""Admin-only routes: manual RUB payment review (/admin/orders).
+"""Admin-only routes: order visibility + manual RUB payment review
+(/admin/orders).
 
 Every route here depends on require_admin (HTTP Basic; fails closed with
 401 if ADMIN_USERNAME/ADMIN_PASSWORD aren't both configured -- see
@@ -22,35 +23,69 @@ from app.web.templating import render
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
+# Every status an operator should be able to see on /admin/orders, in the
+# order a real order actually moves through them (see
+# app.orders.state_machine.ALLOWED_TRANSITIONS). DRAFT/CANCELLED/COMPLETED
+# are deliberately excluded -- DRAFT has no Order row yet (see
+# app.web.checkout_routes.post_policyholder, where the row is first
+# created already at DATA_COMPLETED), and CANCELLED/COMPLETED aren't asked
+# for here. PAYMENT_REVIEW stays the only status with action buttons (see
+# admin_orders.html) -- it's still the one place a human decision
+# (confirm/reject) actually happens; the others are read-only visibility.
+_VISIBLE_STATUSES = [
+    OrderStatus.DATA_COMPLETED,
+    OrderStatus.AWAITING_PAYMENT,
+    OrderStatus.PAYMENT_REVIEW,
+    OrderStatus.PAID,
+    OrderStatus.PROCESSING,
+    OrderStatus.POLICY_READY,
+]
+
+_STATUS_LABELS = {
+    OrderStatus.DATA_COMPLETED: "Заявка заполнена",
+    OrderStatus.AWAITING_PAYMENT: "Ожидает оплаты",
+    OrderStatus.PAYMENT_REVIEW: "Оплата на проверке",
+    OrderStatus.PAID: "Оплачено",
+    OrderStatus.PROCESSING: "В обработке",
+    OrderStatus.POLICY_READY: "Полис готов",
+}
+
 
 @router.get("/orders")
 def get_admin_orders(request: Request, conn: sqlite3.Connection = Depends(get_db)):
-    orders = list_orders_by_status(conn, OrderStatus.PAYMENT_REVIEW)
-
-    rows = []
-    for order in orders:
-        category_name = order.vehicle_category_code
-        if order.vehicle_category_code:
-            category = catalog_repo.get_category_by_code(conn, order.vehicle_category_code)
-            category_name = category.name if category else order.vehicle_category_code
-        submitted_at = get_latest_transition_at(
-            conn,
-            order.id,
-            from_status=OrderStatus.AWAITING_PAYMENT,
-            to_status=OrderStatus.PAYMENT_REVIEW,
-        )
-        rows.append(
-            {
-                "order": order,
-                "category_name": category_name,
-                "submitted_at": submitted_at,
-            }
-        )
+    groups = []
+    for status in _VISIBLE_STATUSES:
+        orders = list_orders_by_status(conn, status)
+        rows = []
+        for order in orders:
+            category_name = order.vehicle_category_code
+            if order.vehicle_category_code:
+                category = catalog_repo.get_category_by_code(conn, order.vehicle_category_code)
+                category_name = category.name if category else order.vehicle_category_code
+            # "«Я оплатил» отправлено" only makes sense for the
+            # payment-review action state -- other groups never queried
+            # this transition at all, same as before this change.
+            submitted_at = None
+            if status == OrderStatus.PAYMENT_REVIEW:
+                submitted_at = get_latest_transition_at(
+                    conn,
+                    order.id,
+                    from_status=OrderStatus.AWAITING_PAYMENT,
+                    to_status=OrderStatus.PAYMENT_REVIEW,
+                )
+            rows.append(
+                {
+                    "order": order,
+                    "category_name": category_name,
+                    "submitted_at": submitted_at,
+                }
+            )
+        groups.append({"status": status.value, "label": _STATUS_LABELS[status], "rows": rows})
 
     return render(
         request,
         "admin_orders.html",
-        {"rows": rows, "telegram_notify_failed": request.query_params.get("telegram_notify_failed") == "1"},
+        {"groups": groups, "telegram_notify_failed": request.query_params.get("telegram_notify_failed") == "1"},
     )
 
 

@@ -1,22 +1,29 @@
 {% extends "base.html" %}
-{% block title %}Проверка оплат{% endblock %}
+{% block title %}Заказы{% endblock %}
 {% block content %}
 <section class="step">
-  <h1 class="step__title">Проверка оплат</h1>
+  <h1 class="step__title">Заказы</h1>
 
   {% if telegram_notify_failed %}
   <p class="form__error">Оплата подтверждена, но уведомление оператору в Telegram не отправлено (Telegram недоступен). Проверьте логи сервера.</p>
   {% endif %}
 
-  {% if not rows %}
-  <p class="step__text">Нет заказов, ожидающих проверки оплаты.</p>
+  {% for group in groups %}
+  <h2 class="step__title step__title--sm">{{ group.label }} ({{ group.rows | length }})</h2>
+
+  {% if not group.rows %}
+  <p class="step__text">Нет заказов в этом статусе.</p>
   {% endif %}
 
-  {% for row in rows %}
+  {% for row in group.rows %}
   <div class="summary-card">
     <div class="summary-card__row summary-card__row--main">
       <span>{{ row.order.public_number }}</span>
       <span>{{ (row.order.price_customer_minor // 100) | rub }} ₽</span>
+    </div>
+    <div class="summary-card__row">
+      <span class="summary-card__label">Статус</span>
+      <span>{{ group.label }}</span>
     </div>
     <div class="summary-card__row">
       <span class="summary-card__label">Категория</span>
@@ -30,11 +37,12 @@
       <span class="summary-card__label">Email</span>
       <span>{{ row.order.contact_email or "—" }}</span>
     </div>
+
+    {% if group.status == "payment_review" %}
     <div class="summary-card__row">
       <span class="summary-card__label">«Я оплатил» отправлено</span>
       <span>{{ row.submitted_at.strftime('%d.%m.%Y %H:%M') if row.submitted_at else "—" }}</span>
     </div>
-
     <div class="summary-actions">
       <form method="post" action="/admin/orders/{{ row.order.resume_token }}/reject">
         <button type="submit" class="btn btn--ghost btn--lg btn--block">Оплата не найдена</button>
@@ -43,7 +51,9 @@
         <button type="submit" class="btn btn--primary btn--lg btn--block">Подтвердить оплату</button>
       </form>
     </div>
+    {% endif %}
   </div>
+  {% endfor %}
   {% endfor %}
 </section>
 {% endblock %}

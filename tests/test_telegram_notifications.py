@@ -171,6 +171,13 @@ def test_confirm_payment_sends_telegram_notification_exactly_once(admin_and_tele
 
     client_ = TestClient(app)
     resume_token = _create_order_in_payment_review(client_)
+    # _create_order_in_payment_review already triggers its OWN two
+    # notifications (new-order at creation, payment-claimed at
+    # confirm-payment -- see tests/test_operator_notifications.py for their
+    # own dedicated coverage) -- clear those here so this test's "exactly
+    # once" assertion is isolated to the PAID notification it actually
+    # exercises (the admin confirm below).
+    sent.clear()
 
     response = _confirm(client_, resume_token)
 
@@ -193,6 +200,7 @@ def test_confirm_payment_uses_the_dedicated_auto_insurance_session_path(
 
     client_ = TestClient(app)
     resume_token = _create_order_in_payment_review(client_)
+    sent.clear()  # isolate to the PAID notification -- see the test above
     _confirm(client_, resume_token)
 
     assert len(sent) == 1
@@ -213,6 +221,7 @@ def test_reconfirming_already_paid_order_does_not_resend(admin_and_telegram_conf
 
     client_ = TestClient(app)
     resume_token = _create_order_in_payment_review(client_)
+    sent.clear()  # isolate to the PAID notification -- see the test above
 
     first = _confirm(client_, resume_token)
     second = _confirm(client_, resume_token)

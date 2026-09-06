@@ -20,6 +20,7 @@ from app.catalog.sync import sync_models_on_demand
 from app.countries import COUNTRIES, match_citizenship_text
 from app.dates.rules import DateRule, FixedDurationDateRule, GeorgiaDateRule, UnknownPeriodCode, today_in_georgia
 from app.deps import get_db, get_ocr_provider, get_order_or_404, get_session_id, get_settings
+from app.notifications.telegram import notify_operator_new_order
 from app.ocr.image import MAX_FILES_PER_RECOGNITION, UploadValidationError, validate_and_normalize_upload
 from app.ocr.parser import build_candidates
 from app.ocr.provider import OcrProvider, OcrProviderError
@@ -1465,6 +1466,32 @@ def post_policyholder(
     # a resubmitted POST (browser back + resubmit, double form submission)
     # fails the pre-order guard above instead of creating a duplicate order.
     clear_draft(conn, session_id)
+
+    # Best-effort operator notification: the Order is already committed
+    # above, so a Telegram outage here must never affect checkout --
+    # notify_operator_new_order() never raises (see its own docstring).
+    # This is the ONLY call site (an order is only ever created once, right
+    # here), so there is no repeat-submission/idempotency concern to guard
+    # against, unlike the payment-claimed notification below.
+    settings = get_settings()
+    category = catalog_repo.get_category_by_code(conn, order.vehicle_category_code)
+    category_name = category.name if category else order.vehicle_category_code
+    period_label = order.period_code
+    if order.vehicle_category_code and order.period_code:
+        period = get_period(settings, order.country_code, order.vehicle_category_code, order.period_code)
+        if period:
+            period_label = period.label
+    notify_operator_new_order(
+        api_id=settings.telegram_operator.api_id,
+        api_hash=settings.telegram_operator.api_hash,
+        phone=settings.telegram_operator.phone,
+        session_path=settings.telegram_operator.session_path,
+        chat_id=settings.telegram_operator.chat_id,
+        order=order,
+        category_name=category_name,
+        period_label=period_label,
+    )
+
     return _redirect(f"/o/{order.resume_token}/summary")
 
 

@@ -25,6 +25,7 @@ from app.analytics.repository import log_event
 from app.catalog import repository as catalog_repo
 from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode
 from app.deps import get_db, get_order_or_404, get_session_id, get_settings
+from app.notifications.telegram import notify_operator_payment_claimed
 from app.orders.models import Order
 from app.orders.repository import set_dates, set_period, set_status
 from app.orders.state_machine import OrderStatus
@@ -371,5 +372,21 @@ def post_confirm_payment(
             order.id,
             OrderStatus.PAYMENT_REVIEW,
             note="customer submitted payment confirmation",
+        )
+        # Best-effort, and idempotent BY CONSTRUCTION: this call only ever
+        # runs inside this same status-guarded branch, so a repeat POST or
+        # page refresh that finds the order no longer AWAITING_PAYMENT
+        # (already PAYMENT_REVIEW from the first click) never re-enters
+        # here and never re-notifies -- same pattern
+        # app.web.admin_routes.post_admin_confirm_payment already uses for
+        # its own PAID notification.
+        settings = get_settings()
+        notify_operator_payment_claimed(
+            api_id=settings.telegram_operator.api_id,
+            api_hash=settings.telegram_operator.api_hash,
+            phone=settings.telegram_operator.phone,
+            session_path=settings.telegram_operator.session_path,
+            chat_id=settings.telegram_operator.chat_id,
+            order=order,
         )
     return RedirectResponse(f"/o/{resume_token}/payment", status_code=303)
