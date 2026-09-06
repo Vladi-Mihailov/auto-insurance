@@ -56,6 +56,13 @@ class DurationRangeConfig(BaseModel):
     # not-a-number-guess rule as PeriodConfig.price_rub above -- see
     # app.pricing.provider.resolve_duration_price.
     pricing: LinearDurationPricingConfig | None = None
+    # Pre-fills end_date (start_date + this many days) the FIRST time a
+    # fresh /date draft is shown -- see app.web.checkout_routes.get_date_step,
+    # the only consumer. None means "no default configured", preserving
+    # today's exact behaviour (blank end_date until the customer fills it
+    # in) for any duration-range country/category that doesn't set this.
+    # Has no bearing on min_days/max_days validation, which is unaffected.
+    default_duration_days: int | None = None
 
 
 class PricingSettings(BaseModel):

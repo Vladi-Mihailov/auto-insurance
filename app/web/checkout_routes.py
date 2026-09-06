@@ -9,7 +9,7 @@ catalog endpoints the vehicle-details picker calls.
 
 import sqlite3
 import time
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -483,13 +483,21 @@ def get_date_step(
             },
         )
 
-    # EXACT DATE RANGE product (AM): both dates are direct user input, so
-    # there's nothing to auto-compute here -- just show whatever the draft
-    # already holds (same "never overwrite a real choice" rule as above).
+    # EXACT DATE RANGE product (AM): both dates are direct user input.
+    # end_date has no fixed period to auto-compute from, but the FIRST time
+    # this draft is shown (no end_date stored yet), it's pre-filled from
+    # duration_range.default_duration_days -- same "never overwrite a real
+    # choice" rule as the FIXED-period branch above: once a real end_date
+    # exists in the draft, it's shown as-is on every later visit.
     start_value = draft.get("start_date")
     end_value = draft.get("end_date")
     effective_start = date.fromisoformat(start_value) if start_value else today_in_georgia()
-    effective_end = date.fromisoformat(end_value) if end_value else None
+    if end_value:
+        effective_end = date.fromisoformat(end_value)
+    elif duration_range.default_duration_days is not None:
+        effective_end = effective_start + timedelta(days=duration_range.default_duration_days)
+    else:
+        effective_end = None
     duration_days = (effective_end - effective_start).days if effective_end else None
     return render(
         request,

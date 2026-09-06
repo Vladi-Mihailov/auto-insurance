@@ -46,6 +46,9 @@ def get_period(settings: Settings, country_code: str, category_code: str, period
 class DurationRange:
     min_days: int
     max_days: int
+    # None means no default is configured -- see
+    # app.web.checkout_routes.get_date_step, the only consumer.
+    default_duration_days: int | None = None
 
 
 def get_duration_range(settings: Settings, country_code: str, category_code: str) -> DurationRange | None:
@@ -59,7 +62,9 @@ def get_duration_range(settings: Settings, country_code: str, category_code: str
     config = settings.pricing.duration_ranges_by_country_category.get(country_code, {}).get(category_code)
     if config is None:
         return None
-    return DurationRange(min_days=config.min_days, max_days=config.max_days)
+    return DurationRange(
+        min_days=config.min_days, max_days=config.max_days, default_duration_days=config.default_duration_days
+    )
 
 
 def _round_half_up_to_rub(value: Fraction) -> int:

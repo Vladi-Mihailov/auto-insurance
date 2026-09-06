@@ -21,9 +21,7 @@
              value="{{ end_date.isoformat() if end_date else '' }}" min="{{ min_date }}" required>
       <span class="step__hint">Срок страхования — от {{ duration_range.min_days }} до {{ duration_range.max_days }} дней.</span>
     </label>
-    {% if duration_days %}
-    <p class="step__text">Срок: {{ duration_days }} дней</p>
-    {% endif %}
+    <p class="step__text" id="duration-days-text">{% if duration_days %}Срок: {{ duration_days }} дней{% endif %}</p>
     {% else %}
     <div class="field">
       <span class="field__label">Окончание страхования</span>

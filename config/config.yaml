@@ -190,6 +190,13 @@ duration_ranges:
     passenger_car:
       min_days: 10
       max_days: 365
+      # Pre-fills end_date on the FIRST view of a fresh /date draft only
+      # (start_date + this many days) -- see
+      # app.web.checkout_routes.get_date_step. Never overwrites dates a
+      # customer already chose, and has no bearing on the 10-365 day
+      # min_days/max_days validation above, which stays enforced exactly as
+      # before regardless of this default.
+      default_duration_days: 15
       pricing:
         reference_days_1: 15
         reference_price_rub_1: 1499
