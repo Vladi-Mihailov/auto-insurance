@@ -52,6 +52,34 @@
       </form>
     </div>
     {% endif %}
+
+    {% if row.order.country_code == "GE" and row.order.status in ("paid", "processing") %}
+    <div class="summary-actions">
+      {% if row.tpl_issuance and row.tpl_issuance.is_operator_reported_paid %}
+      <p class="step__text">Ожидается получение полиса</p>
+      {% elif row.tpl_issuance and row.tpl_issuance.is_bog_link_ready %}
+      <div class="summary-card__row">
+        <span class="summary-card__label">Закупочная цена TPL</span>
+        <span>{{ "%.2f"|format(row.tpl_issuance.tpl_purchase_price_gel) }} GEL</span>
+      </div>
+      <a href="{{ row.tpl_issuance.bog_payment_url }}" target="_blank" rel="noopener noreferrer" class="btn btn--primary btn--lg btn--block">Оплатить TPL</a>
+      <p class="step__text">Ссылка действует ограниченное время. Откройте её и завершите оплату сразу.</p>
+      <form method="post" action="/admin/orders/{{ row.order.resume_token }}/tpl/issue">
+        <button type="submit" class="btn btn--ghost btn--lg btn--block">Получить новую ссылку</button>
+      </form>
+      <form method="post" action="/admin/orders/{{ row.order.resume_token }}/tpl/mark-paid">
+        <button type="submit" class="btn btn--ghost btn--lg btn--block">Оплата TPL завершена</button>
+      </form>
+      {% else %}
+      {% if row.tpl_issuance and row.tpl_issuance.last_error %}
+      <p class="form__error">{{ row.tpl_issuance.last_error }}</p>
+      {% endif %}
+      <form method="post" action="/admin/orders/{{ row.order.resume_token }}/tpl/issue">
+        <button type="submit" class="btn btn--primary btn--lg btn--block">Оформить полис TPL</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
   {% endfor %}
   {% endfor %}

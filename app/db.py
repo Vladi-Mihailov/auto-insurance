@@ -89,6 +89,40 @@ CREATE TABLE IF NOT EXISTS insurance_vehicle_models (
     UNIQUE (manufacturer_id, external_id),
     FOREIGN KEY (manufacturer_id) REFERENCES insurance_manufacturers (id)
 );
+
+-- One row per Order that has ever started real TPL (Georgia) policy
+-- issuance -- see app.integrations.tpl_ge. A separate table rather than
+-- more insurance_orders columns: this state is entirely specific to one
+-- country's one downstream integration (always NULL/absent for AM/TR and
+-- for any GE order that never reaches PAID), and it already needs its own
+-- lifecycle (pending -> application_created -> bog_link_ready ->
+-- operator_reported_paid, or failed) independent of the order's own status
+-- history -- same reasoning that already keeps status history in its own
+-- table rather than columns on insurance_orders.
+--
+-- tpl_uid is the SAME value sent to TPL as "uId" AND reused as
+-- "policyUId" for the BOG handoff -- generated exactly once per order and
+-- never regenerated (see app.integrations.tpl_ge.service.issue_tpl_policy),
+-- which is what guarantees a repeated admin click never creates a second
+-- TPL application. tpl_purchase_price_gel is stored as TEXT (an exact
+-- decimal string, e.g. "30.00") -- never a float, same money-handling rule
+-- as the rest of this project. Never store card/CVC/OTP/3DS/BOG-token data
+-- here or anywhere else -- bog_payment_url itself is the one genuinely
+-- sensitive value this table holds (see app.integrations.tpl_ge module
+-- docstring).
+CREATE TABLE IF NOT EXISTS insurance_tpl_issuance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL UNIQUE,
+    tpl_uid TEXT NOT NULL UNIQUE,
+    tpl_product_id INTEGER,
+    tpl_purchase_price_gel TEXT,
+    bog_payment_url TEXT,
+    issuance_status TEXT NOT NULL,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES insurance_orders (id)
+);
 """
 
 # (column, definition) — added to insurance_orders if missing. Idempotent: safe to

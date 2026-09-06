@@ -14,12 +14,22 @@ from fastapi.responses import RedirectResponse
 
 from app.catalog import repository as catalog_repo
 from app.deps import get_db, get_order_or_404, get_settings, require_admin
+from app.integrations.tpl_ge import repository as tpl_ge_repo
+from app.integrations.tpl_ge import service as tpl_ge_service
+from app.integrations.tpl_ge.errors import TplIssuanceError
 from app.notifications.telegram import notify_operator_order_paid
 from app.orders.models import Order
 from app.orders.repository import get_latest_transition_at, list_orders_by_status, set_status
 from app.orders.state_machine import OrderStatus
 from app.pricing.provider import get_period
 from app.web.templating import render
+
+# Statuses a GE order's TPL-issuance card can appear under -- it starts
+# showing right after PAID and keeps showing through PROCESSING (issuance in
+# progress), same status range app.integrations.tpl_ge.service.issue_tpl_policy
+# itself accepts. Never shown for AM/TR (see get_admin_orders below) or for
+# any other status.
+_TPL_ISSUANCE_VISIBLE_STATUSES = {OrderStatus.PAID.value, OrderStatus.PROCESSING.value}
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
@@ -73,11 +83,19 @@ def get_admin_orders(request: Request, conn: sqlite3.Connection = Depends(get_db
                     from_status=OrderStatus.AWAITING_PAYMENT,
                     to_status=OrderStatus.PAYMENT_REVIEW,
                 )
+            # GE-only, PAID/PROCESSING-only -- AM/TR orders and every other
+            # status never get a tpl_issuance value at all (stays None),
+            # which is what keeps admin_orders.html from rendering this
+            # block for them (see the template's country_code check).
+            tpl_issuance = None
+            if order.country_code == "GE" and order.status in _TPL_ISSUANCE_VISIBLE_STATUSES:
+                tpl_issuance = tpl_ge_repo.get_issuance_by_order_id(conn, order.id)
             rows.append(
                 {
                     "order": order,
                     "category_name": category_name,
                     "submitted_at": submitted_at,
+                    "tpl_issuance": tpl_issuance,
                 }
             )
         groups.append({"status": status.value, "label": _STATUS_LABELS[status], "rows": rows})
@@ -150,4 +168,44 @@ def post_admin_reject_payment(
     it."""
     if order.status == OrderStatus.PAYMENT_REVIEW.value:
         set_status(conn, order.id, OrderStatus.AWAITING_PAYMENT, note="admin payment not found")
+    return RedirectResponse("/admin/orders", status_code=303)
+
+
+@router.post("/orders/{resume_token}/tpl/issue")
+def post_admin_tpl_issue(
+    order: Order = Depends(get_order_or_404),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """"Оформить полис TPL" (first click) AND "Получить новую ссылку" (any
+    later click) -- the same idempotent action, see
+    app.integrations.tpl_ge.service.issue_tpl_policy's own docstring for
+    why one endpoint correctly serves both. Any TplIssuanceError is already
+    persisted as insurance_tpl_issuance.last_error by issue_tpl_policy
+    itself before it propagates -- the admin list reads that column
+    directly (see admin_orders.html), so nothing further needs to happen
+    with the exception here beyond not letting it become a 500."""
+    settings = get_settings()
+    try:
+        tpl_ge_service.issue_tpl_policy(conn, order, settings)
+    except TplIssuanceError:
+        pass
+    return RedirectResponse("/admin/orders", status_code=303)
+
+
+@router.post("/orders/{resume_token}/tpl/mark-paid")
+def post_admin_tpl_mark_paid(
+    order: Order = Depends(get_order_or_404),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """"Оплата TPL завершена" -- a manual operator acknowledgement only.
+    Deliberately does NOT move Order.status to POLICY_READY (see
+    app.integrations.tpl_ge.service.report_operator_paid's docstring) --
+    the real success callback / policy number / PDF retrieval mechanism is
+    still unexplored, so the order stays PROCESSING with an updated
+    issuance sub-status the admin page reads to show "Ожидается получение
+    полиса" instead of the payment button."""
+    try:
+        tpl_ge_service.report_operator_paid(conn, order)
+    except TplIssuanceError:
+        pass
     return RedirectResponse("/admin/orders", status_code=303)

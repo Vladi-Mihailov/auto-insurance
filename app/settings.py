@@ -160,6 +160,23 @@ class AdminSettings(BaseModel):
     password: str | None = None
 
 
+class TplGeSettings(BaseModel):
+    # Static, manually-captured FingerprintJS visitorId, reused verbatim as
+    # the "visitorId" field TPL's real POST /api/policies expects -- NOT a
+    # spoofed/generated fingerprint (that was explicitly ruled out during
+    # discovery). Whether TPL's backend genuinely validates this value
+    # server-side, versus merely logging it, was never confirmed -- reusing
+    # a real value captured from an actual browser session is the only
+    # non-fabricating option available, and it is exactly what discovery
+    # testing itself already relied on (the same literal value was reused
+    # across multiple real, successful calls). None means the integration
+    # is not configured yet -- app.integrations.tpl_ge.service must refuse
+    # to proceed with a clear operator-facing error rather than invent one,
+    # same "None means off, fail closed" rule as OcrSettings/AdminSettings/
+    # TelegramOperatorSettings above.
+    static_visitor_id: str | None = None
+
+
 class TelegramOperatorSettings(BaseModel):
     # Transport is Telethon (an authorized Telegram USER account), not the
     # Bot API -- no bot is created. api_id/api_hash/phone are the SAME
@@ -189,6 +206,7 @@ class Settings(BaseModel):
     contacts: ContactSettings = ContactSettings()
     ocr: OcrSettings = OcrSettings()
     admin: AdminSettings = AdminSettings()
+    tpl_ge: TplGeSettings = TplGeSettings()
     telegram_operator: TelegramOperatorSettings = TelegramOperatorSettings()
 
 
@@ -293,6 +311,9 @@ def load_settings(project_root: Path) -> Settings:
         admin=AdminSettings(
             username=os.getenv("ADMIN_USERNAME") or None,
             password=os.getenv("ADMIN_PASSWORD") or None,
+        ),
+        tpl_ge=TplGeSettings(
+            static_visitor_id=os.getenv("TPL_GE_STATIC_VISITOR_ID") or None,
         ),
         telegram_operator=TelegramOperatorSettings(
             api_id=int(os.getenv("TELEGRAM_API_ID")) if os.getenv("TELEGRAM_API_ID") else None,
