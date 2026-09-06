@@ -105,16 +105,20 @@ def _allowed_category_codes(settings, country_code: str) -> list[str] | None:
 
 # Categories with no engine at all -- engine_power is never shown/required
 # for these regardless of country, even where the country would otherwise
-# require it (AM/TR). Currently just trailer; a set (not a single hardcoded
+# require it (AM). Currently just trailer; a set (not a single hardcoded
 # check) so adding another engine-less category later is a one-line change
 # here, not a new branch.
 _CATEGORIES_WITHOUT_ENGINE = {"trailer"}
 
 
 def _requires_engine_power(country_code: str, category_code: str) -> bool:
+    # TR no longer requires this for ordinary OSAGO purchase (business
+    # decision, 2026-09-06): the source site (strahovka-turkiye.com) only
+    # asks for engine/motor info for a separate, unrelated "Turkish plates
+    # under customs deposit" service, not for buying the policy itself.
     if category_code in _CATEGORIES_WITHOUT_ENGINE:
         return False
-    return country_code in ("AM", "TR")
+    return country_code == "AM"
 
 
 def _requires_model_year(country_code: str) -> bool:

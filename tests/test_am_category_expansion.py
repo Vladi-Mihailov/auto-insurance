@@ -313,9 +313,14 @@ def test_ge_category_pricing_unaffected_by_am_expansion(real_config, category_co
     assert periods == expected
 
 
-def test_tr_still_passenger_car_only_after_am_expansion(real_config):
+def test_tr_category_set_unaffected_by_am_expansion(real_config):
+    """TR was separately expanded to four categories (passenger_car,
+    motorcycle, truck, special_vehicle -- see tests/test_tr_tl_pricing.py)
+    around the same time as AM's own six-category expansion, but the two are
+    independent decisions -- TR must NOT end up with AM's full six-category
+    set (bus/trailer specifically must stay excluded for TR)."""
     client = TestClient(app)
     _start(client, "TR")
-    response = client.post("/category-period", data={"category_code": "truck", "period_code": "30d"})
+    response = client.post("/category-period", data={"category_code": "bus", "period_code": "30d"})
     assert response.status_code == 422
     assert "Выберите категорию транспорта" in response.text

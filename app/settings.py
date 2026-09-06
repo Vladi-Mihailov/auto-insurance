@@ -7,6 +7,7 @@ committed to git.
 """
 
 import os
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -25,6 +26,14 @@ class PeriodConfig(BaseModel):
     # show this as a not-available/configuration-required state, never invent
     # a number. See app.pricing.provider.
     price_rub: int | None = None
+    # Turkey-only alternative to price_rub: a source (strahovka-turkiye.com)
+    # tariff in Turkish Lira, converted at read time via
+    # PricingSettings.tr_tl_conversion -- see
+    # app.pricing.provider.available_periods, the only consumer. A period
+    # never sets both; GE/AM periods never set this at all, so they keep
+    # reading price_rub exactly as before. Absent (None) alongside a None
+    # price_rub still means "not priced yet", same as always.
+    price_tl: int | None = None
 
 
 class LinearDurationPricingConfig(BaseModel):
@@ -65,6 +74,21 @@ class DurationRangeConfig(BaseModel):
     default_duration_days: int | None = None
 
 
+class TrTlConversionConfig(BaseModel):
+    # Turkey-only: source_price_tl * rate + markup_rub, rounded to the
+    # nearest RUB amount ending in 99 -- see
+    # app.pricing.provider.available_periods, the only consumer, which
+    # additionally requires country_code == "TR" before ever applying this
+    # (not just "this period happens to have a price_tl") -- deliberately
+    # named/scoped to Turkey specifically so a future country adding
+    # price_tl by mistake can't silently start converting through this.
+    # rate is Decimal (never float) -- config.yaml must quote it as a
+    # string (e.g. "1.80") so no float precision is introduced before
+    # Pydantic parses it.
+    rate: Decimal
+    markup_rub: int
+
+
 class PricingSettings(BaseModel):
     # country -> vehicle_category_code -> periods
     periods_by_country_category: dict[str, dict[str, list[PeriodConfig]]]
@@ -74,6 +98,9 @@ class PricingSettings(BaseModel):
     # periods_by_country_category) or an exact-duration one (present here),
     # never both -- app.web.checkout_routes checks this one first.
     duration_ranges_by_country_category: dict[str, dict[str, DurationRangeConfig]] = {}
+    # None means Turkey has no TL-based periods configured yet (or the whole
+    # mechanism is unused) -- see TrTlConversionConfig.
+    tr_tl_conversion: TrTlConversionConfig | None = None
 
 
 class CatalogSettings(BaseModel):
@@ -220,6 +247,16 @@ def load_settings(project_root: Path) -> Settings:
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Invalid duration_ranges structure in {config_path}: {exc}") from exc
 
+    # Sibling top-level key to pricing/duration_ranges, NOT nested inside
+    # pricing: -- pricing_raw's own keys are all treated as country codes
+    # (see periods_by_country_category above), so a conversion-config key
+    # living there would be misparsed as a bogus country.
+    tr_tl_conversion_raw = raw.get("tr_tl_conversion")
+    try:
+        tr_tl_conversion = TrTlConversionConfig(**tr_tl_conversion_raw) if tr_tl_conversion_raw else None
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Invalid tr_tl_conversion structure in {config_path}: {exc}") from exc
+
     db_file = project_root / os.getenv("INSURANCE_DB_FILE", "data/insurance.db")
 
     catalog_raw = raw.get("catalog", {})
@@ -234,6 +271,7 @@ def load_settings(project_root: Path) -> Settings:
         pricing=PricingSettings(
             periods_by_country_category=periods_by_country_category,
             duration_ranges_by_country_category=duration_ranges_by_country_category,
+            tr_tl_conversion=tr_tl_conversion,
         ),
         catalog=CatalogSettings(enabled_category_codes_by_country=enabled_category_codes_by_country),
         payment=PaymentSettings(

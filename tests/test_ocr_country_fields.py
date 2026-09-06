@@ -113,8 +113,9 @@ def _reach_am_documents_upload(client: TestClient) -> None:
 
 
 def _reach_tr_documents_upload(client: TestClient) -> None:
-    """TR periods are unpriced (see tests/test_country_periods.py) -- draft
-    is seeded directly, same technique used throughout this rollout."""
+    """TR now has real TL-based pricing (see tests/test_tr_tl_pricing.py),
+    but the draft is still seeded directly here as a minimal shortcut to
+    reach documents-upload, same technique used throughout this rollout."""
     _start(client, "TR")
     _seed_draft(
         client,
@@ -267,7 +268,14 @@ def test_am_missing_engine_power_leaves_manual_field_available(real_config, fake
 # ---------------------------------------------------------------------------
 
 
-def test_tr_valid_engine_power_and_model_year_autofill_vehicle_form(real_config, fake_provider):
+def test_tr_valid_model_year_autofills_vehicle_form_engine_power_ignored(real_config, fake_provider):
+    """engine_power is AM-only now (business decision, 2026-09-06) --
+    OCR still unconditionally writes an extracted engine_power into the
+    draft (see post_documents_upload, country-agnostic by design, same as
+    manufacturer/model), but /vehicle no longer renders that field for TR
+    at all, so the value sits inert in the draft and is never shown or
+    submitted -- same as a stray manually-typed value would be (see
+    tests/test_country_fields.py's own coverage of that)."""
     fake_provider["provider"] = FakeOcrProvider(
         result=OcrResult(
             provider="fake",
@@ -286,11 +294,11 @@ def test_tr_valid_engine_power_and_model_year_autofill_vehicle_form(real_config,
     assert response.status_code == 303
 
     draft = _read_draft(client)
-    assert draft["engine_power"] == 150
+    assert draft["engine_power"] == 150  # OCR still writes it, unconditionally
     assert draft["model_year"] == 2020
 
     review = client.get("/vehicle")
-    assert 'value="150"' in review.text
+    assert 'name="engine_power"' not in review.text  # never rendered for TR
     assert 'value="2020"' in review.text
 
 

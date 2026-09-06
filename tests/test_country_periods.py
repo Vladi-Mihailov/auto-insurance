@@ -257,13 +257,13 @@ def test_tr_periods_exactly_30_45_90_180_365(real_config):
 
 
 def test_tr_api_periods_only_returns_priced_periods(real_config):
-    """Customer-facing: 30d/45d/90d (priced) are offered -- 180d/365d
-    stay configured (see the test above) but are never selectable."""
+    """Customer-facing: all five periods are priced now (TL-based formula,
+    see tests/test_tr_tl_pricing.py) -- none held back as unconfirmed."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     codes = [p["code"] for p in response.json()]
-    assert codes == ["30d", "45d", "90d"]
+    assert codes == ["30d", "45d", "90d", "180d", "365d"]
 
 
 def test_tr_selected_period_survives_into_date_step_via_seeded_draft(real_config):
@@ -460,9 +460,10 @@ def test_summary_shows_duration_in_days_for_a_period_code_none_am_order():
 
 
 # ---------------------------------------------------------------------------
-# TR passenger_car 30d: first confirmed business price (2299 RUB, confirmed
-# 2026-08-29). 45d/90d/180d/365d remain deliberately unpriced -- see
-# config.yaml's pricing.TR.passenger_car.
+# TR passenger_car: TL-based pricing (business confirmed 2026-09-06,
+# replacing the old manually-confirmed 2299/2999/3999 RUB numbers -- see
+# tests/test_tr_tl_pricing.py for the formula/rounding coverage itself).
+# All five periods are now genuinely priced; none held back as unconfirmed.
 # ---------------------------------------------------------------------------
 
 
@@ -472,25 +473,21 @@ def test_tr_30d_is_now_priced_and_selectable(real_config):
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     periods = {p["code"]: p for p in response.json()}
     assert periods["30d"]["is_priced"] is True
-    assert periods["30d"]["price_rub"] == 2299
+    assert periods["30d"]["price_rub"] == 1999
 
 
-def test_tr_45_90_now_priced_180_365_remain_unselectable(real_config):
+def test_tr_all_five_periods_are_priced(real_config):
     client = TestClient(app)
     _start(client, "TR")
-    for code in ("180d", "365d"):
-        response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": code})
-        assert response.status_code == 422, code
-        assert "Цена для этого периода пока не настроена" in response.text, code
-
-    for code, expected_minor in (("45d", 299900), ("90d", 399900)):
+    expected_minor = {"30d": 199900, "45d": 239900, "90d": 289900, "180d": 979900, "365d": 1409900}
+    for code, minor in expected_minor.items():
         response = client.post(
             "/category-period", data={"category_code": "passenger_car", "period_code": code}, follow_redirects=False
         )
         assert response.status_code == 303, code
         draft = _read_draft(client)
         assert draft["period_code"] == code
-        assert draft["price_customer_minor"] == expected_minor, code
+        assert draft["price_customer_minor"] == minor, code
 
 
 def test_tr_30d_category_period_submission_now_succeeds(real_config):
@@ -503,14 +500,15 @@ def test_tr_30d_category_period_submission_now_succeeds(real_config):
     assert response.headers["location"] == "/date"
     draft = _read_draft(client)
     assert draft["period_code"] == "30d"
-    assert draft["price_customer_minor"] == 229900  # 2299 RUB in kopecks
+    assert draft["price_customer_minor"] == 199900  # 1999 RUB in kopecks
 
 
 def test_tr_30d_price_flows_through_draft_order_summary_and_payment(real_config):
     """Full round-trip: draft -> create_order -> Order -> summary -> payment,
-    using TR's now-real 30d price. TR requires engine_power/model_year
-    (vehicle) and date_of_birth (policyholder) as of Step 4 -- supplied
-    here so the flow actually reaches order creation."""
+    using TR's TL-based 30d price. TR requires model_year (vehicle) and
+    date_of_birth (policyholder) -- engine_power is no longer required (see
+    tests/test_tr_tl_pricing.py's field-behavior coverage) so it's simply
+    not submitted here."""
     from app.orders.repository import get_order_by_token
     from policyholder_helpers import valid_policyholder_data
 
@@ -527,7 +525,6 @@ def test_tr_30d_price_flows_through_draft_order_summary_and_payment(real_config)
             "identifier": "JT123456789012345",
             "manufacturer_id": str(_manufacturer_id),
             "model_id": str(_model_id),
-            "engine_power": "150",
             "model_year": "2020",
         },
     )
@@ -546,31 +543,30 @@ def test_tr_30d_price_flows_through_draft_order_summary_and_payment(real_config)
         conn.close()
     assert order.country_code == "TR"
     assert order.period_code == "30d"
-    assert order.price_customer_minor == 229900
+    assert order.price_customer_minor == 199900
 
     summary = client.get(f"/o/{resume_token}/summary")
     assert summary.status_code == 200
-    assert "2 299" in summary.text
+    assert "1 999" in summary.text
     assert "30 дней" in summary.text
 
     client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
     payment = client.get(f"/o/{resume_token}/payment")
     assert payment.status_code == 200
-    assert "2 299" in payment.text
+    assert "1 999" in payment.text
 
 
 @pytest.mark.parametrize(
     "period_code,expected_minor,expected_price_text,duration_days",
     [
-        ("45d", 299900, "2 999", 45),
-        ("90d", 399900, "3 999", 90),
+        ("45d", 239900, "2 399", 45),
+        ("90d", 289900, "2 899", 90),
     ],
 )
 def test_tr_45d_and_90d_full_flow(real_config, period_code, expected_minor, expected_price_text, duration_days):
-    """Same round-trip as 30d above, now that 45d (2999 RUB) and 90d (3999
-    RUB) are also confirmed prices -- including the exact end_date TR's own
-    FixedDurationDateRule computes for each (start + N days, no month-based
-    math involved for either)."""
+    """Same round-trip as 30d above, using the TL-based 45d/90d prices --
+    including the exact end_date TR's own FixedDurationDateRule computes
+    for each (start + N days, no month-based math involved for either)."""
     from app.orders.repository import get_order_by_token
     from policyholder_helpers import valid_policyholder_data
 
@@ -599,7 +595,6 @@ def test_tr_45d_and_90d_full_flow(real_config, period_code, expected_minor, expe
             "identifier": "JT123456789012345",
             "manufacturer_id": str(_manufacturer_id),
             "model_id": str(_model_id),
-            "engine_power": "150",
             "model_year": "2020",
         },
     )
@@ -655,7 +650,6 @@ def test_tr_full_flow_starting_from_the_actual_homepage_link(real_config):
             "identifier": "JT123456789012345",
             "manufacturer_id": str(_manufacturer_id),
             "model_id": str(_model_id),
-            "engine_power": "150",
             "model_year": "2020",
         },
     )
@@ -673,17 +667,17 @@ def test_tr_full_flow_starting_from_the_actual_homepage_link(real_config):
     finally:
         conn.close()
     assert order.country_code == "TR"
-    assert order.price_customer_minor == 229900
+    assert order.price_customer_minor == 199900
 
     client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
     payment = client.get(f"/o/{resume_token}/payment")
     assert payment.status_code == 200
-    assert "2 299" in payment.text
+    assert "1 999" in payment.text
 
 
-def test_ge_pricing_unaffected_by_tr_30d_price(real_config):
-    """Regression guard: adding TR's first real price must not touch GE's
-    own real production prices (confirmed 2026-08-13)."""
+def test_ge_pricing_unaffected_by_tr_tl_pricing(real_config):
+    """Regression guard: TR's TL-based pricing must not touch GE's own real
+    production prices (confirmed 2026-08-13)."""
     client = TestClient(app)
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     periods = {p["code"]: p["price_rub"] for p in response.json()}
@@ -693,9 +687,9 @@ def test_ge_pricing_unaffected_by_tr_30d_price(real_config):
 def test_homepage_tr_teaser_stays_the_cheapest_priced_period(real_config):
     """The homepage teaser is computed from whatever's actually priced
     (see app.web.routes.landing -- min() over is_priced periods, never
-    hardcoded), so it must still read "от 2 299 ₽" now that 45d/90d are
-    also priced -- 2299 remains the cheapest of the three."""
+    hardcoded), so it must now read "от 1 999 ₽" -- TR's TL-based 30d price,
+    still the cheapest of the five."""
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert "от 2 299 ₽" in response.text
+    assert "от 1 999 ₽" in response.text

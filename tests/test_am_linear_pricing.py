@@ -395,17 +395,14 @@ def test_ge_pricing_unaffected_by_am_linear_pricing(real_config):
 
 
 def test_tr_pricing_unaffected_by_am_linear_pricing(real_config):
+    """TR's own prices are the TL-based formula's output (see
+    tests/test_tr_tl_pricing.py) -- unrelated to AM's linear model. This
+    only guards that AM's pricing mechanism has no effect on them."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     periods = {p["code"]: p["price_rub"] for p in response.json()}
-    assert periods == {"30d": 2299, "45d": 2999, "90d": 3999}
-
-    from app.pricing.provider import available_periods
-
-    all_codes = {p.code: p.price_rub for p in available_periods(get_settings(), "TR", "passenger_car")}
-    assert all_codes["180d"] is None
-    assert all_codes["365d"] is None
+    assert periods == {"30d": 1999, "45d": 2399, "90d": 2899, "180d": 9799, "365d": 14099}
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +450,10 @@ def test_ge_homepage_unaffected_by_am_public_launch(real_config):
 
 
 def test_tr_homepage_unaffected_by_am_public_launch(real_config):
+    """TR's own teaser price changed independently (TL-based pricing, see
+    tests/test_tr_tl_pricing.py) -- this only guards that AM's linear
+    pricing has no effect on it."""
     client = TestClient(app)
     response = client.get("/")
     assert 'href="/start?country=TR"' in response.text
-    assert "от 2 299 ₽" in response.text
+    assert "от 1 999 ₽" in response.text

@@ -120,52 +120,111 @@ pricing:
 
   # Turkey: FIXED-PERIOD product (unlike Armenia's exact-date-range one
   # below), same shape as Georgia's own pricing lists -- see
-  # app.dates.rules.FixedDurationDateRule for the date math. A null price
-  # means "period exists, not selectable yet" throughout this codebase (see
-  # PeriodOption.is_priced) -- the SAME existing mechanism Georgia's own
-  # periods used before business confirmed real RUB numbers, not a new one
-  # invented for Turkey. Only passenger_car is populated (Step 2 limits TR
-  # to passenger_car); the periods_by_country_category structure is already
-  # keyed by category, so adding motorcycle/trailer/truck/etc. later needs
-  # no code change, just more entries here once their period sets are
-  # confirmed (they are NOT assumed to be the same 5 periods).
+  # app.dates.rules.FixedDurationDateRule for the date math. Unlike GE/AM,
+  # every period here uses price_tl (not price_rub): business confirmed on
+  # 2026-09-06 that Turkey's real source of truth is strahovka-turkiye.com's
+  # own TL tariffs, converted to RUB via tr_tl_conversion below (see
+  # app.pricing.provider.available_periods, the only consumer of price_tl).
+  # Each category ONLY lists the periods strahovka-turkiye.com itself
+  # actually offers for that vehicle type -- e.g. passenger_car has all
+  # five periods, but motorcycle has no 45d, and truck/special_vehicle only
+  # have 30d/90d. This is deliberate: the source simply doesn't sell those
+  # combinations, so we don't invent a period (priced or unpriced) to force
+  # a uniform UI across categories -- see app.web.checkout_routes'
+  # category-period screen, which already renders whatever period set
+  # available_periods() returns per category, no fixed-shape assumption.
   #
-  # 30d RUB price confirmed by business on 2026-08-29 -- first real TR
-  # price. 45d/90d confirmed shortly after, same session. 180d/365d remain
-  # intentionally unpriced (null) until business confirms them; do not
-  # guess/interpolate a number for them.
+  # bus and trailer are INTENTIONALLY ABSENT here (and from
+  # catalog.enabled_category_codes_by_country.TR below) -- the source has no
+  # confirmed tariff for either, so they are not offered at all, not offered
+  # unpriced. Do not add them without a real source tariff.
+  #
+  # Category mapping from the source's own classification (confirmed
+  # 2026-09-06, NOT a code-level assumption -- see the category-mapping
+  # research): "Легковое авто" -> passenger_car, "Мотоцикл" -> motorcycle,
+  # "Kamyonet" -> truck, "Karavan" -> special_vehicle. Kamyonet is actually a
+  # light-commercial-vehicle bucket (van/minibus/pickup) and Karavan is a
+  # self-propelled motorhome (not a towed trailer) -- both are looser
+  # matches than GE's own category definitions, accepted as the closest
+  # available mapping, not a literal equivalence.
   TR:
     passenger_car:
       - code: "30d"
         label: "30 дней"
-        price_rub: 2299
+        price_tl: 750
       - code: "45d"
         label: "45 дней"
-        price_rub: 2999
+        price_tl: 1000
       - code: "90d"
         label: "90 дней"
-        price_rub: 3999
+        price_tl: 1250
       - code: "180d"
         label: "180 дней"
-        price_rub: null
+        price_tl: 5100
       - code: "365d"
         label: "365 дней"
-        price_rub: null
+        price_tl: 7500
+    # motorcycle: 45d not offered by the source at all -- absent, not null.
+    motorcycle:
+      - code: "30d"
+        label: "30 дней"
+        price_tl: 750
+      - code: "90d"
+        label: "90 дней"
+        price_tl: 1000
+      - code: "180d"
+        label: "180 дней"
+        price_tl: 1500
+      - code: "365d"
+        label: "365 дней"
+        price_tl: 2500
+    # truck <- source's "Kamyonet" (see mapping note above). Only 30d/90d
+    # offered by the source.
+    truck:
+      - code: "30d"
+        label: "30 дней"
+        price_tl: 1100
+      - code: "90d"
+        label: "90 дней"
+        price_tl: 1600
+    # special_vehicle <- source's "Karavan" (see mapping note above). Only
+    # 30d/90d offered by the source.
+    special_vehicle:
+      - code: "30d"
+        label: "30 дней"
+        price_tl: 3100
+      - code: "90d"
+        label: "90 дней"
+        price_tl: 4200
+
+# Turkey-only TL->RUB conversion for pricing.TR's price_tl periods above --
+# see app.settings.TrTlConversionConfig and
+# app.pricing.provider.available_periods (which additionally requires
+# country_code == "TR" before ever using this, not just "a period happens to
+# have price_tl"). rate is a MANUAL config value confirmed by business on
+# 2026-09-06 -- no external FX API integration; update this one number by
+# hand to reprice every TR period, GE/AM are structurally unaffected since
+# neither uses price_tl at all. final RUB = round_to_nearest_X99(price_tl *
+# rate + markup_rub) -- see app.pricing.provider._round_to_nearest_x99 for
+# the exact rounding rule (ties round up).
+tr_tl_conversion:
+  rate: "1.80"
+  markup_rub: 600
 
 # country -> which internal vehicle_category_code values are enabled for that
 # country's checkout (see app.catalog.repository.list_categories's
 # allowed_codes param). A country absent here (Georgia) is UNRESTRICTED --
-# every category the catalog has stays exactly as it is today. TR stays
-# narrowed to passenger_car only for now (an MVP scope limit -- its
-# engine-power/duration/pricing data for other categories isn't confirmed
-# yet). AM is now open for all six categories (business confirmed 2026-09-06
-# that Armenia's tariff grid is literally Georgia's own, per category -- see
-# duration_ranges.AM below). Add more codes here later; no checkout/route
-# code changes needed.
+# every category the catalog has stays exactly as it is today. TR is now
+# open for the four categories with a confirmed source tariff (business
+# confirmed 2026-09-06); bus/trailer stay excluded until a source tariff for
+# them is confirmed -- see pricing.TR's own comment above. AM is open for
+# all six categories (business confirmed 2026-09-06 that Armenia's tariff
+# grid is literally Georgia's own, per category -- see duration_ranges.AM
+# below). Add more codes here later; no checkout/route code changes needed.
 catalog:
   enabled_category_codes_by_country:
     AM: ["passenger_car", "motorcycle", "bus", "truck", "trailer", "special_vehicle"]
-    TR: ["passenger_car"]
+    TR: ["passenger_car", "motorcycle", "truck", "special_vehicle"]
 
 # country -> vehicle_category_code -> {min_days, max_days} -- EXACT DATE
 # RANGE products (currently only Armenia's foreign-vehicle CMTPL, per the

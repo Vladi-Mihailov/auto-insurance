@@ -2,11 +2,15 @@
 fields (engine_power, model_year, date_of_birth).
 
 GE never shows or requires any of the three. AM requires engine_power only.
-TR requires all three. AM/TR still have no real pricing (see
-tests/test_country_periods.py), so a full order for them is only reachable
-by seeding price_customer_minor directly into the draft -- this file does
-that purely to test THESE new fields end-to-end through the real
-validation/route code, not to claim AM/TR pricing exists.
+TR requires model_year and date_of_birth -- NOT engine_power (business
+decision, 2026-09-06: the source site, strahovka-turkiye.com, only asks for
+engine/motor info for a separate, unrelated "Turkish plates under customs
+deposit" service, not for buying the OSAGO policy itself -- see
+tests/test_tr_tl_pricing.py's field-behavior coverage for the full flow).
+AM still has no real pricing (see tests/test_country_periods.py), so a full
+AM order is only reachable by seeding price_customer_minor directly into the
+draft -- this file does that purely to test these fields end-to-end through
+the real validation/route code, not to claim AM pricing exists.
 """
 
 import sqlite3
@@ -244,12 +248,12 @@ def test_am_summary_shows_engine_power_only(real_config):
 
 
 def _reach_tr_vehicle_screen(client: TestClient) -> None:
-    """TR periods are real but unpriced (see test_country_periods.py) --
-    the draft is seeded directly with a fixed period + price to reach
-    /vehicle, same technique used throughout this rollout to isolate a
-    field/route test from the still-unsolved pricing gap. Both /vehicle's
-    own guard and data_entry_method are satisfied directly by the seed, so
-    no /method POST is needed first."""
+    """TR now has real TL-based pricing (see tests/test_tr_tl_pricing.py),
+    but this file still seeds the draft directly with a fixed period +
+    price to reach /vehicle -- a minimal shortcut to isolate a field/route
+    test, not a claim that TR pricing doesn't exist. Both /vehicle's own
+    guard and data_entry_method are satisfied directly by the seed, so no
+    /method POST is needed first."""
     _start(client, "TR")
     _seed_draft(
         client,
@@ -262,49 +266,65 @@ def _reach_tr_vehicle_screen(client: TestClient) -> None:
     )
 
 
-def test_tr_vehicle_form_shows_engine_power_and_model_year(real_config):
+def test_tr_vehicle_form_shows_model_year_not_engine_power(real_config):
+    """engine_power is AM-only now -- TR no longer shows it at all (business
+    decision, 2026-09-06)."""
     client = TestClient(app)
     _reach_tr_vehicle_screen(client)
     response = client.get("/vehicle")
     assert response.status_code == 200
-    assert 'name="engine_power"' in response.text
+    assert 'name="engine_power"' not in response.text
     assert 'name="model_year"' in response.text
 
 
 def test_tr_policyholder_shows_date_of_birth(real_config):
     client = TestClient(app)
     _reach_tr_vehicle_screen(client)
-    client.post("/vehicle", data=_vehicle_form_data(engine_power="150", model_year="2020"))
+    client.post("/vehicle", data=_vehicle_form_data(model_year="2020"))
     response = client.get("/policyholder")
     assert response.status_code == 200
     assert 'name="date_of_birth"' in response.text
 
 
-def test_tr_engine_power_and_model_year_required_server_side(real_config):
+def test_tr_model_year_required_engine_power_not_required_server_side(real_config):
     client = TestClient(app)
     _reach_tr_vehicle_screen(client)
     response = client.post("/vehicle", data=_vehicle_form_data())  # neither field
     assert response.status_code == 422
-    assert "Мощность двигателя: заполните это поле" in response.text
+    assert "Мощность двигателя" not in response.text
     assert "Год выпуска: заполните это поле" in response.text
+
+
+def test_tr_vehicle_submission_succeeds_without_engine_power(real_config):
+    client = TestClient(app)
+    _reach_tr_vehicle_screen(client)
+    response = client.post("/vehicle", data=_vehicle_form_data(model_year="2020"), follow_redirects=False)
+    assert response.status_code == 303
 
 
 def test_tr_date_of_birth_required_server_side(real_config):
     client = TestClient(app)
     _reach_tr_vehicle_screen(client)
-    client.post("/vehicle", data=_vehicle_form_data(engine_power="150", model_year="2020"))
+    client.post("/vehicle", data=_vehicle_form_data(model_year="2020"))
     response = client.post("/policyholder", data=valid_policyholder_data(contact_telegram="@tr_no_dob"))
     assert response.status_code == 422
     assert "Дата рождения: заполните это поле" in response.text
 
 
-def test_tr_all_three_values_survive_draft_and_are_saved_correctly(real_config):
+def test_tr_model_year_and_dob_survive_engine_power_is_ignored(real_config):
+    """A stray engine_power value in the raw POST (e.g. a stale/tampered
+    submission from before this field was hidden) must be silently
+    discarded, never validated or stored -- same "GE never asks, so it
+    always stays None regardless of a stale submission" rule post_vehicle
+    already documents for GE, now also true for TR."""
     client = TestClient(app)
     _reach_tr_vehicle_screen(client)
-    client.post("/vehicle", data=_vehicle_form_data(engine_power="150", model_year="2020"), follow_redirects=False)
+    client.post(
+        "/vehicle", data=_vehicle_form_data(engine_power="150", model_year="2020"), follow_redirects=False
+    )
     draft = _read_draft(client)
-    assert draft["engine_power"] == 150
     assert draft["model_year"] == 2020
+    assert draft.get("engine_power") is None
 
     response = client.post(
         "/policyholder",
@@ -315,15 +335,15 @@ def test_tr_all_three_values_survive_draft_and_are_saved_correctly(real_config):
     resume_token = response.headers["location"].split("/")[2]
 
     order = _order(resume_token)
-    assert order.engine_power == 150
+    assert order.engine_power is None
     assert order.model_year == 2020
     assert order.date_of_birth.isoformat() == "1990-05-20"
 
 
-def test_tr_summary_shows_engine_power_model_year_and_dob(real_config):
+def test_tr_summary_shows_model_year_and_dob_not_engine_power(real_config):
     client = TestClient(app)
     _reach_tr_vehicle_screen(client)
-    client.post("/vehicle", data=_vehicle_form_data(engine_power="150", model_year="2020"))
+    client.post("/vehicle", data=_vehicle_form_data(model_year="2020"))
     response = client.post(
         "/policyholder",
         data=valid_policyholder_data(contact_telegram="@tr_summary", date_of_birth="1990-05-20"),
@@ -333,13 +353,32 @@ def test_tr_summary_shows_engine_power_model_year_and_dob(real_config):
 
     summary = client.get(f"/o/{resume_token}/summary")
     assert summary.status_code == 200
-    assert "Мощность двигателя" in summary.text
-    assert "150 л.с." in summary.text
+    assert "Мощность двигателя" not in summary.text
     assert "Год выпуска" in summary.text
     assert "2020" in summary.text
     assert "Дата рождения" in summary.text
     assert "20.05.1990" in summary.text
     assert "None" not in summary.text
+
+
+def test_tr_edit_vehicle_also_omits_engine_power(real_config):
+    """Same category-aware... well, country-aware here (TR has no
+    engine-less-category concept, it's ALL of TR) rule applies post-order,
+    on the edit-vehicle screen (a second render path through the same
+    _vehicle_form_context)."""
+    client = TestClient(app)
+    _reach_tr_vehicle_screen(client)
+    client.post("/vehicle", data=_vehicle_form_data(model_year="2020"))
+    response = client.post(
+        "/policyholder",
+        data=valid_policyholder_data(contact_telegram="@tr_edit_no_engine", date_of_birth="1990-05-20"),
+        follow_redirects=False,
+    )
+    resume_token = response.headers["location"].split("/")[2]
+
+    edit_get = client.get(f"/o/{resume_token}/edit-vehicle")
+    assert edit_get.status_code == 200
+    assert 'name="engine_power"' not in edit_get.text
 
 
 # ---------------------------------------------------------------------------

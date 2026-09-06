@@ -11,10 +11,14 @@ that config map, so GE-focused tests don't need it.
 AM was expanded from passenger_car-only to all six categories (business
 confirmed 2026-09-06 that Armenia's tariff grid is literally Georgia's own,
 per category -- see tests/test_am_category_expansion.py for the full
-pricing/flow coverage of the other five). TR remains passenger_car-only and
-still has no priced periods for anything else -- a passenger_car submission
-for TR is expected to clear the CATEGORY check and then still fail on the
-PERIOD check, asserted as two distinct failure modes below, never conflated.
+pricing/flow coverage of the other five). TR was separately expanded
+(2026-09-06) from passenger_car-only to four categories --  passenger_car,
+motorcycle, truck, special_vehicle -- each with a real, fully-priced TL-based
+tariff (see tests/test_tr_tl_pricing.py for the full pricing/flow coverage).
+bus and trailer stay excluded for TR: the source (strahovka-turkiye.com) has
+no confirmed tariff for either. Every TR period configured is now priced --
+there is no more "period exists but price not configured" state for TR, so
+tests below that used to check that no longer apply.
 """
 
 from datetime import timedelta
@@ -142,58 +146,91 @@ def test_am_truck_category_is_now_accepted(real_config):
 
 
 # ---------------------------------------------------------------------------
-# Turkey: only passenger_car enabled
+# Turkey: four categories enabled (passenger_car, motorcycle, truck,
+# special_vehicle), each fully priced via the TL-based formula -- see
+# tests/test_tr_tl_pricing.py for the formula/rounding coverage itself.
 # ---------------------------------------------------------------------------
 
 
-def test_tr_category_period_screen_only_shows_passenger_car(real_config):
+def test_tr_category_period_screen_shows_the_four_enabled_categories(real_config):
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/category-period")
     assert response.status_code == 200
-    assert 'data-category-code="passenger_car"' in response.text
-    assert 'data-category-code="truck"' not in response.text
+    for code in ("passenger_car", "motorcycle", "truck", "special_vehicle"):
+        assert f'data-category-code="{code}"' in response.text
+    for code in ("bus", "trailer"):
+        assert f'data-category-code="{code}"' not in response.text
 
 
-def test_tr_category_period_screen_shows_only_the_three_priced_tiles(real_config):
-    """Customer sees exactly three selectable periods (30d/2299, 45d/2999,
-    90d/3999 RUB) -- 180d/365d stay configured in config.yaml as future
-    availability (see test_tr_config_still_has_all_five_periods_configured
-    below) but are never rendered as tiles."""
+def test_tr_category_period_screen_shows_all_five_passenger_car_periods_priced(real_config):
+    """Every configured passenger_car period is now genuinely priced (no
+    more "period exists but unpriced" state for TR) -- all five show up as
+    selectable tiles with the new TL-formula prices."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/category-period")
     assert response.status_code == 200
-    assert 'data-period-code="30d"' in response.text
-    assert 'data-period-code="45d"' in response.text
-    assert 'data-period-code="90d"' in response.text
-    assert "2 299" in response.text
-    assert "2 999" in response.text
-    assert "3 999" in response.text
-    for code in ("180d", "365d"):
-        assert f'data-period-code="{code}"' not in response.text
+    for code in ("30d", "45d", "90d", "180d", "365d"):
+        assert f'data-period-code="{code}"' in response.text
+    assert "1 999" in response.text
+    assert "2 399" in response.text
+    assert "2 899" in response.text
+    assert "9 799" in response.text
+    assert "14 099" in response.text
 
 
-def test_tr_passenger_car_clears_the_category_check(real_config):
-    """passenger_car is enabled for TR -- 180d has no confirmed price yet
-    (see config.yaml's pricing.TR.passenger_car -- only 30d/45d/90d are
-    priced so far), so a valid category+period still fails on the PRICE
-    check specifically, never the category check."""
+def test_tr_passenger_car_180d_now_succeeds(real_config):
+    """180d used to fail the PRICE check (unconfirmed) -- now that the
+    source's own 180d tariff is used, it's a real, selectable, priced
+    period like any other."""
     client = TestClient(app)
     _start(client, "TR")
-    response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": "180d"})
-    assert response.status_code == 422
-    assert "Цена для этого периода пока не настроена" in response.text
-    assert "Выберите категорию транспорта" not in response.text
-    assert "Выберите один из доступных периодов" not in response.text
+    response = client.post(
+        "/category-period", data={"category_code": "passenger_car", "period_code": "180d"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/date"
 
 
-def test_tr_disabled_category_is_rejected(real_config):
+def test_tr_truck_and_special_vehicle_are_now_accepted(real_config):
+    """truck/special_vehicle used to be rejected for TR (passenger_car-only
+    MVP scope) -- now that both are enabled with a real 30d/90d tariff, they
+    clear the category+period check exactly like passenger_car does."""
+    for category_code in ("truck", "special_vehicle"):
+        client = TestClient(app)
+        _start(client, "TR")
+        response = client.post(
+            "/category-period",
+            data={"category_code": category_code, "period_code": "30d"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303, category_code
+        assert response.headers["location"] == "/date", category_code
+
+
+def test_tr_bus_is_still_rejected(real_config):
+    """bus has no confirmed source tariff -- stays excluded even though
+    other TR categories were just expanded."""
     client = TestClient(app)
     _start(client, "TR")
-    response = client.post("/category-period", data={"category_code": "truck", "period_code": "30d"})
+    response = client.post("/category-period", data={"category_code": "bus", "period_code": "30d"})
     assert response.status_code == 422
     assert "Выберите категорию транспорта" in response.text
+
+
+def test_tr_truck_45d_is_rejected_as_an_unavailable_period_not_an_unpriced_one(real_config):
+    """truck only offers 30d/90d (the source has no 45d tariff for it at
+    all) -- requesting 45d must fail as "period doesn't exist for this
+    category", the same error an unknown period code gets, NOT the
+    separate "price not configured" error (which would wrongly imply the
+    period exists and is just pending a price)."""
+    client = TestClient(app)
+    _start(client, "TR")
+    response = client.post("/category-period", data={"category_code": "truck", "period_code": "45d"})
+    assert response.status_code == 422
+    assert "Выберите один из доступных периодов" in response.text
+    assert "Цена для этого периода пока не настроена" not in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -224,42 +261,57 @@ def test_am_api_periods_is_empty_not_500_and_not_ge_prices(real_config):
     assert response.json() == []
 
 
-def test_tr_config_still_has_all_five_periods_configured(real_config):
-    """The underlying config/availability layer (app.pricing.provider,
-    NOT the customer-facing /api/periods endpoint) still has all five TR
-    periods -- 180d/365d remain configured future availability (price_rub:
-    null), never deleted, even though the customer-facing UI only ever
-    offers 30d/45d/90d now (see test_tr_api_periods_only_returns_priced_periods)."""
+def test_tr_config_has_all_five_passenger_car_periods_all_priced(real_config):
+    """The underlying config/availability layer (app.pricing.provider, NOT
+    the customer-facing /api/periods endpoint) has exactly the five
+    passenger_car periods the source offers, every single one priced via
+    the TL-based formula -- there is no more "period exists but unpriced"
+    state for TR (see tests/test_tr_tl_pricing.py for the formula itself)."""
     from app.pricing.provider import available_periods
 
     periods = {p.code: p for p in available_periods(get_settings(), "TR", "passenger_car")}
     assert list(periods) == ["30d", "45d", "90d", "180d", "365d"]
-    assert periods["30d"].is_priced is True
-    assert periods["30d"].price_rub == 2299
-    assert periods["45d"].is_priced is True
-    assert periods["45d"].price_rub == 2999
-    assert periods["90d"].is_priced is True
-    assert periods["90d"].price_rub == 3999
-    for code in ("180d", "365d"):
-        assert periods[code].is_priced is False
-        assert periods[code].price_rub is None
+    expected_rub = {"30d": 1999, "45d": 2399, "90d": 2899, "180d": 9799, "365d": 14099}
+    for code, price_rub in expected_rub.items():
+        assert periods[code].is_priced is True, code
+        assert periods[code].price_rub == price_rub, code
 
 
-def test_tr_api_periods_only_returns_priced_periods_not_ge_prices(real_config):
-    """Customer-facing endpoint: only the three priced periods are
-    returned -- 180d/365d stay configured (see the test above) but are
-    never exposed as selectable options to the browser."""
+def test_tr_api_periods_returns_all_five_passenger_car_periods(real_config):
+    """Customer-facing endpoint: all five periods are now genuinely priced
+    and selectable -- unlike before, nothing is held back as unconfirmed."""
     client = TestClient(app)
     _start(client, "TR")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     assert response.status_code == 200
     periods = {p["code"]: p for p in response.json()}
-    assert list(periods) == ["30d", "45d", "90d"]
-    assert periods["30d"]["price_rub"] == 2299
-    assert periods["45d"]["price_rub"] == 2999
-    assert periods["90d"]["price_rub"] == 3999
+    assert list(periods) == ["30d", "45d", "90d", "180d", "365d"]
     for code in periods:
-        assert periods[code]["is_priced"] is True
+        assert periods[code]["is_priced"] is True, code
+
+
+def test_tr_api_periods_for_truck_and_special_vehicle_shows_only_30_90(real_config):
+    """truck/special_vehicle only offer 30d/90d -- the source has no other
+    tariff for them, so the API must never invent a 45d/180d/365d entry."""
+    client = TestClient(app)
+    _start(client, "TR")
+    for category_code in ("truck", "special_vehicle"):
+        response = client.get("/api/periods", params={"category_code": category_code})
+        assert response.status_code == 200
+        codes = [p["code"] for p in response.json()]
+        assert codes == ["30d", "90d"], category_code
+
+
+def test_tr_api_periods_for_motorcycle_has_no_45d(real_config):
+    """motorcycle has no 45d tariff at all on the source -- must never
+    appear, priced or not."""
+    client = TestClient(app)
+    _start(client, "TR")
+    response = client.get("/api/periods", params={"category_code": "motorcycle"})
+    assert response.status_code == 200
+    codes = [p["code"] for p in response.json()]
+    assert codes == ["30d", "90d", "180d", "365d"]
+    assert "45d" not in codes
 
 
 def test_am_category_period_get_screen_renders_without_error_and_shows_no_priced_period(real_config):
@@ -275,7 +327,7 @@ def test_am_category_period_get_screen_renders_without_error_and_shows_no_priced
 
 
 # ---------------------------------------------------------------------------
-# Public TR launch: edit-coverage must show/accept the same priced-only set
+# Public TR launch: edit-coverage must show/accept the same priced set.
 # ---------------------------------------------------------------------------
 
 
@@ -294,7 +346,6 @@ def _create_tr_order(client: TestClient) -> str:
             "identifier": "JT123456789012345",
             "manufacturer_id": str(_manufacturer_id),
             "model_id": str(_model_id),
-            "engine_power": "150",
             "model_year": "2020",
         },
     )
@@ -307,20 +358,20 @@ def _create_tr_order(client: TestClient) -> str:
     return response.headers["location"].split("/")[2]
 
 
-def test_tr_edit_coverage_shows_only_the_three_priced_tiles(real_config):
+def test_tr_edit_coverage_shows_all_five_priced_tiles(real_config):
     client = TestClient(app)
     resume_token = _create_tr_order(client)
 
     response = client.get(f"/o/{resume_token}/edit-coverage")
     assert response.status_code == 200
-    assert 'data-period-code="30d"' in response.text
-    assert 'data-period-code="45d"' in response.text
-    assert 'data-period-code="90d"' in response.text
-    for code in ("180d", "365d"):
-        assert f'data-period-code="{code}"' not in response.text
+    for code in ("30d", "45d", "90d", "180d", "365d"):
+        assert f'data-period-code="{code}"' in response.text
 
 
-def test_tr_edit_coverage_rejects_manual_post_of_an_unpriced_period(real_config):
+def test_tr_edit_coverage_now_accepts_180d(real_config):
+    """180d used to be rejected via edit-coverage (unpriced) -- now it's a
+    real, priced period like any other, so switching to it succeeds and
+    updates the order's stored price to the new period's."""
     client = TestClient(app)
     resume_token = _create_tr_order(client)
 
@@ -329,8 +380,33 @@ def test_tr_edit_coverage_rejects_manual_post_of_an_unpriced_period(real_config)
         data={"category_code": "passenger_car", "period_code": "180d"},
         follow_redirects=False,
     )
+    assert response.status_code == 303
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        from app.orders.repository import get_order_by_token
+
+        order = get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+    assert order.period_code == "180d"
+    assert order.price_customer_minor == 979900  # 180d = 9799 RUB
+
+
+def test_tr_edit_coverage_rejects_a_period_the_category_never_offered(real_config):
+    """Same "period doesn't exist for this category" rejection as
+    /category-period itself (see test_tr_truck_45d_is_rejected_as_an_unavailable_period_not_an_unpriced_one) --
+    exercised here via edit-coverage instead of the pre-order step."""
+    client = TestClient(app)
+    resume_token = _create_tr_order(client)
+
+    response = client.post(
+        f"/o/{resume_token}/edit-coverage",
+        data={"category_code": "passenger_car", "period_code": "14d"},
+        follow_redirects=False,
+    )
     assert response.status_code == 422
-    assert "Цена для этого периода пока не настроена" in response.text
+    assert "Выберите один из доступных периодов" in response.text
 
     conn = get_connection(_settings.app.db_file)
     try:
