@@ -4,7 +4,8 @@ Business rule: the FIRST time a fresh AM draft reaches /date (no dates
 chosen yet), start_date defaults to today (already existing behaviour) and
 end_date now defaults to start_date + duration_ranges.AM.passenger_car.
 default_duration_days (15, see config/config.yaml), so the customer sees a
-real 15-day range and a "Срок: 15 дней" label instead of two blank fields.
+real 15-day range and an editable "Срок, дней" number input (defaulting to
+15) instead of two blank fields.
 Once the customer has actually chosen dates (draft has a real end_date),
 revisiting /date must show exactly that choice, never reset it back to the
 15-day default -- same "never overwrite a real choice" rule the
@@ -81,7 +82,8 @@ def test_am_fresh_date_step_defaults_end_date_to_15_days_after_start(real_config
     expected_end = today + timedelta(days=15)
     assert f'value="{today.isoformat()}"' in response.text
     assert f'value="{expected_end.isoformat()}"' in response.text
-    assert "Срок: 15 дней" in response.text
+    assert 'id="duration_days"' in response.text
+    assert 'value="15"' in response.text  # duration_days input's own value
     assert "от 10 до 365 дней" in response.text  # min/max hint unaffected
 
 
@@ -122,8 +124,8 @@ def test_am_in_progress_draft_keeps_its_own_dates_not_the_default(real_config):
     assert response.status_code == 200
     assert f'value="{_iso(0)}"' in response.text
     assert f'value="{_iso(30)}"' in response.text
-    assert "Срок: 30 дней" in response.text
-    assert "Срок: 15 дней" not in response.text
+    assert 'value="30"' in response.text  # duration_days input shows 30, not the 15-day default
+    assert 'value="15"' not in response.text
 
 
 def test_am_boundaries_still_enforced_on_submit_regardless_of_default(real_config):
@@ -158,10 +160,11 @@ def test_ge_date_step_unaffected_by_am_default(real_config):
     assert f'value="{today.isoformat()}"' in response.text
     assert expected_end.strftime("%d.%m.%Y") in response.text
     # GE's own end date stays a read-only computed display, not an editable
-    # input, and never shows AM's "Срок: N дней"/min-max hint markup.
+    # input, and never shows AM's editable duration_days field/min-max hint
+    # markup.
     assert 'name="end_date"' not in response.text
-    assert "Срок:" not in response.text
-    assert "duration-days-text" not in response.text
+    assert 'id="duration_days"' not in response.text
+    assert "Срок, дней" not in response.text
 
 
 def test_tr_date_step_unaffected_by_am_default(real_config):
@@ -176,4 +179,4 @@ def test_tr_date_step_unaffected_by_am_default(real_config):
     assert f'value="{today.isoformat()}"' in response.text
     assert expected_end.strftime("%d.%m.%Y") in response.text
     assert 'name="end_date"' not in response.text
-    assert "Срок:" not in response.text
+    assert 'id="duration_days"' not in response.text

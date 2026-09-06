@@ -33,30 +33,35 @@ document.addEventListener("DOMContentLoaded", function () {
   // end_date are real editable <input> fields (unlike the FIXED-period
   // block above, whose end date is a read-only <div id="end-date-display">)
   // -- that's what distinguishes this mode, no extra window flag needed.
-  // The rule is a flat day-count, so it's plain client-side date math, no
-  // server round-trip like the FIXED-period preview above needs.
+  // duration_days is ALSO a real editable <input> (a number field, not just
+  // a display) -- kept in sync with end_date bidirectionally. The rule is a
+  // flat day-count, so it's plain client-side date math, no server
+  // round-trip like the FIXED-period preview above needs.
   var endInput = document.getElementById("end_date");
-  if (startInput && endInput) {
-    var durationText = document.getElementById("duration-days-text");
-
-    var updateDurationText = function () {
-      var days = daysBetween(startInput.value, endInput.value);
-      if (durationText) {
-        durationText.textContent = days !== null ? "Срок: " + days + " дней" : "";
+  var durationInput = document.getElementById("duration_days");
+  if (startInput && endInput && durationInput) {
+    var updateEndDateFromDuration = function () {
+      var days = parseInt(durationInput.value, 10);
+      if (startInput.value && days > 0) {
+        endInput.value = addDays(startInput.value, days);
       }
     };
 
-    startInput.addEventListener("change", function () {
-      var previousDuration = daysBetween(startInput.dataset.prevValue, endInput.value);
-      if (previousDuration !== null && startInput.value) {
-        endInput.value = addDays(startInput.value, previousDuration);
-      }
-      startInput.dataset.prevValue = startInput.value;
-      updateDurationText();
-    });
-    startInput.dataset.prevValue = startInput.value;
+    var updateDurationFromDates = function () {
+      var days = daysBetween(startInput.value, endInput.value);
+      durationInput.value = days !== null ? days : "";
+    };
 
-    endInput.addEventListener("change", updateDurationText);
+    startInput.addEventListener("change", function () {
+      // Preserve whatever duration is currently in the field (the
+      // customer's own choice, default or edited) and shift end_date to
+      // match the new start_date -- duration_days itself never changes
+      // just because start_date did.
+      updateEndDateFromDuration();
+    });
+
+    endInput.addEventListener("change", updateDurationFromDates);
+    durationInput.addEventListener("input", updateEndDateFromDuration);
   }
 });
 
