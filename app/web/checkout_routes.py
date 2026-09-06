@@ -102,7 +102,18 @@ def _allowed_category_codes(settings, country_code: str) -> list[str] | None:
 # AM/TR-only fields" (see the gap-analysis report's field matrix) -- every
 # route that shows, validates, or persists these fields goes through these
 # three, never a hardcoded country check duplicated per route/template.
-def _requires_engine_power(country_code: str) -> bool:
+
+# Categories with no engine at all -- engine_power is never shown/required
+# for these regardless of country, even where the country would otherwise
+# require it (AM/TR). Currently just trailer; a set (not a single hardcoded
+# check) so adding another engine-less category later is a one-line change
+# here, not a new branch.
+_CATEGORIES_WITHOUT_ENGINE = {"trailer"}
+
+
+def _requires_engine_power(country_code: str, category_code: str) -> bool:
+    if category_code in _CATEGORIES_WITHOUT_ENGINE:
+        return False
     return country_code in ("AM", "TR")
 
 
@@ -903,6 +914,7 @@ def _vehicle_form_context(
     steps: list,
     back_url: str,
     country_code: str,
+    category_code: str,
 ) -> dict:
     return {
         "values": values,
@@ -913,7 +925,7 @@ def _vehicle_form_context(
         "steps": steps,
         "back_url": back_url,
         "country_code": country_code,
-        "requires_engine_power": _requires_engine_power(country_code),
+        "requires_engine_power": _requires_engine_power(country_code, category_code),
         "requires_model_year": _requires_model_year(country_code),
     }
 
@@ -997,6 +1009,7 @@ def get_vehicle(
             steps=build_draft_steps(draft, 4),
             back_url="/method",
             country_code=_draft_country_code(draft),
+            category_code=draft["vehicle_category_code"],
         ),
     )
 
@@ -1035,7 +1048,7 @@ def post_vehicle(
     # GE never asks for either field, so both stay None regardless of
     # whatever a tampered/stale submission happened to include.
     engine_power_clean = None
-    if _requires_engine_power(country_code):
+    if _requires_engine_power(country_code, draft["vehicle_category_code"]):
         engine_power_clean, engine_power_error = validate_engine_power(engine_power)
         if engine_power_error:
             errors["engine_power"] = engine_power_error
@@ -1068,6 +1081,7 @@ def post_vehicle(
                 steps=build_draft_steps(draft, 4),
                 back_url="/method",
                 country_code=country_code,
+                category_code=draft["vehicle_category_code"],
             ),
             status_code=422,
         )
@@ -1490,6 +1504,7 @@ def get_edit_vehicle(
             steps=build_order_steps(order, 4),
             back_url=f"/o/{order.resume_token}/summary",
             country_code=order.country_code,
+            category_code=order.vehicle_category_code,
         ),
     )
 
@@ -1521,7 +1536,7 @@ def post_edit_vehicle(
     errors.update(catalog_errors)
 
     engine_power_clean = None
-    if _requires_engine_power(order.country_code):
+    if _requires_engine_power(order.country_code, order.vehicle_category_code):
         engine_power_clean, engine_power_error = validate_engine_power(engine_power)
         if engine_power_error:
             errors["engine_power"] = engine_power_error
@@ -1551,6 +1566,7 @@ def post_edit_vehicle(
                 steps=build_order_steps(order, 4),
                 back_url=f"/o/{resume_token}/summary",
                 country_code=order.country_code,
+                category_code=order.vehicle_category_code,
             ),
             status_code=422,
         )

@@ -1,18 +1,20 @@
 """Step 2 of the GE/AM/TR rollout: country-aware vehicle category
 availability on the existing "Категория и срок" screen.
 
-The restriction (AM/TR limited to passenger_car for now) lives in the REAL
-config/config.yaml (see catalog.enabled_category_codes_by_country there),
-not the test fixture -- so most of this file uses `real_config` (mirrors
-test_routes_smoke.py's own `real_production_config` fixture) rather than the
-dummy pricing fixture tests/fixtures/test_config.yaml normally points at.
-Georgia is never in that config map, so GE-focused tests don't need it.
+The restriction lives in the REAL config/config.yaml (see
+catalog.enabled_category_codes_by_country there), not the test fixture --
+so most of this file uses `real_config` (mirrors test_routes_smoke.py's own
+`real_production_config` fixture) rather than the dummy pricing fixture
+tests/fixtures/test_config.yaml normally points at. Georgia is never in
+that config map, so GE-focused tests don't need it.
 
-AM/TR still have zero priced periods anywhere (out of scope for this step --
-see tests/test_country_routing.py and app.web.checkout_routes' module
-docstring), so a passenger_car submission for AM/TR is expected to clear the
-CATEGORY check and then still fail on the PERIOD check -- these are
-deliberately asserted as two distinct failure modes below, never conflated.
+AM was expanded from passenger_car-only to all six categories (business
+confirmed 2026-09-06 that Armenia's tariff grid is literally Georgia's own,
+per category -- see tests/test_am_category_expansion.py for the full
+pricing/flow coverage of the other five). TR remains passenger_car-only and
+still has no priced periods for anything else -- a passenger_car submission
+for TR is expected to clear the CATEGORY check and then still fail on the
+PERIOD check, asserted as two distinct failure modes below, never conflated.
 """
 
 from datetime import timedelta
@@ -28,15 +30,23 @@ from app.main import app
 
 _settings = get_settings()
 
-# Reuses the exact same external_id/code pairs test_truck.py and every other
-# module already use for "passenger_car"(7)/"truck"(8) -- upsert_category's
-# conflict target is external_id, so this is idempotent onto the same rows
-# regardless of which test module happens to run first. Manufacturer/model
-# use external_id=19001 -- next free block in the per-file numbering
-# convention (see tests/test_country_routing.py's own comment).
+# Reuses the exact same external_id/code pairs every other module already
+# uses for these six categories (see app.catalog.sync.CATEGORY_CODE_BY_EXTERNAL_ID)
+# -- upsert_category's conflict target is external_id, so this is idempotent
+# onto the same rows regardless of which test module happens to run first.
+# All six are seeded here (not just passenger_car/truck) so this file's own
+# AM-now-shows-all-six-categories test passes even when run in isolation,
+# without depending on another test module having run first and inserted
+# them as a side effect. Manufacturer/model use external_id=19001 -- next
+# free block in the per-file numbering convention (see
+# tests/test_country_routing.py's own comment).
 _conn = get_connection(_settings.app.db_file)
 upsert_category(_conn, external_id=7, code="passenger_car", name="Легковой", icon="vehicle")
 upsert_category(_conn, external_id=8, code="truck", name="Грузовик", icon="truck")
+upsert_category(_conn, external_id=9, code="bus", name="Автобус", icon="bus")
+upsert_category(_conn, external_id=10, code="motorcycle", name="Мотоцикл", icon="motorcycle")
+upsert_category(_conn, external_id=11, code="trailer", name="Прицеп", icon="trailer")
+upsert_category(_conn, external_id=12, code="special_vehicle", name="Спецтехника", icon="special_vehicle")
 _manufacturer_id = upsert_manufacturer(_conn, external_id=19001, name="ZCATEGORIESFICTIONALMAKE", is_popular=False)
 _model_id = upsert_model(_conn, external_id=19001, manufacturer_id=_manufacturer_id, name="ZCATEGORIESFICTIONALMODEL")
 mark_models_synced(_conn, _manufacturer_id)
@@ -85,17 +95,20 @@ def test_ge_category_selection_still_works(real_config):
 
 
 # ---------------------------------------------------------------------------
-# Armenia: only passenger_car enabled
+# Armenia: all six categories enabled (business confirmed 2026-09-06 --
+# see tests/test_am_category_expansion.py for the full per-category
+# pricing/flow coverage; this file only covers the category-availability
+# screen itself).
 # ---------------------------------------------------------------------------
 
 
-def test_am_category_period_screen_only_shows_passenger_car(real_config):
+def test_am_category_period_screen_shows_all_six_categories(real_config):
     client = TestClient(app)
     _start(client, "AM")
     response = client.get("/category-period")
     assert response.status_code == 200
-    assert 'data-category-code="passenger_car"' in response.text
-    assert 'data-category-code="truck"' not in response.text
+    for code in ("passenger_car", "motorcycle", "bus", "truck", "trailer", "special_vehicle"):
+        assert f'data-category-code="{code}"' in response.text
 
 
 def test_am_passenger_car_clears_the_category_check(real_config):
@@ -115,12 +128,17 @@ def test_am_passenger_car_clears_the_category_check(real_config):
     assert response.headers["location"] == "/date"
 
 
-def test_am_disabled_category_is_rejected(real_config):
+def test_am_truck_category_is_now_accepted(real_config):
+    """truck used to be rejected for AM (passenger_car-only MVP scope) --
+    now that all six categories are enabled, it clears the category check
+    exactly like passenger_car does, straight through to /date."""
     client = TestClient(app)
     _start(client, "AM")
-    response = client.post("/category-period", data={"category_code": "truck", "period_code": "15d"})
-    assert response.status_code == 422
-    assert "Выберите категорию транспорта" in response.text
+    response = client.post(
+        "/category-period", data={"category_code": "truck", "period_code": ""}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/date"
 
 
 # ---------------------------------------------------------------------------
@@ -183,13 +201,15 @@ def test_tr_disabled_category_is_rejected(real_config):
 # ---------------------------------------------------------------------------
 
 
-def test_am_never_shows_ge_categories_beyond_its_own_allowlist(real_config):
+def test_tr_never_shows_ge_categories_beyond_its_own_allowlist(real_config):
     """Regression guard for the exact failure mode Step 2 explicitly warns
-    against: AM/TR must never fall back to Georgia's full category list."""
+    against: TR must never fall back to Georgia's full category list. (AM's
+    own version of this guard no longer applies -- AM's allowlist now
+    equals the full catalog, see test_am_category_period_screen_shows_all_six_categories.)"""
     client = TestClient(app)
-    _start(client, "AM")
+    _start(client, "TR")
     response = client.get("/category-period")
-    assert "Прицеп" not in response.text  # trailer -- part of GE's set, not AM's
+    assert "Прицеп" not in response.text  # trailer -- part of GE's set, not TR's
     assert "Автобус" not in response.text  # bus -- same
 
 

@@ -386,7 +386,7 @@ def test_am_order_creation_now_succeeds_with_real_linear_pricing(real_config):
         order = get_order_by_token(conn, resume_token)
     finally:
         conn.close()
-    assert order.price_customer_minor == 123200  # 10d = 1232 RUB, see test_am_linear_pricing.py
+    assert order.price_customer_minor == 108200  # 10d = 1082 RUB, see test_am_linear_pricing.py
 
 
 # ---------------------------------------------------------------------------

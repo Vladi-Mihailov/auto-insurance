@@ -1,13 +1,19 @@
 """Armenia (AM) linear daily pricing + percent discount.
 
-Two reference points (15d=1499 RUB, 30d=2299 RUB) define a straight
-RUB-per-day line -- confirmed by business 2026-08-29 -- applied across the
+Two reference points define a straight RUB-per-day line, applied across the
 FULL configured 10-365 day range for AM passenger_car (see
 config/config.yaml's duration_ranges.AM.passenger_car.pricing and
 app.pricing.provider.resolve_duration_price). Every individual day count is
 computed from the formula directly, never bucketed into brackets; days
 outside 15-30 are intentionally extrapolated, not rejected -- a deliberate
 business rule, not a bug.
+
+Business confirmed 2026-09-06 that Armenia's tariff grid is LITERALLY
+Georgia's own tariff grid for the corresponding category -- passenger_car's
+reference points are GE's own 15d=1349/30d=2149 prices directly, no markup
+(this replaced an earlier +150 markup that briefly shipped -- see the
+git history for that correction). See tests/test_am_category_expansion.py
+for the other five AM categories, added in the same change.
 
 All dates are computed relative to today_in_georgia(), never a hardcoded
 literal -- same time-bomb lesson as tests/test_country_periods.py.
@@ -83,9 +89,9 @@ def _settings_with_discount(discount_percent: int):
     tests below."""
     pricing_config = LinearDurationPricingConfig(
         reference_days_1=15,
-        reference_price_rub_1=1499,
+        reference_price_rub_1=1349,
         reference_days_2=30,
-        reference_price_rub_2=2299,
+        reference_price_rub_2=2149,
         discount_percent=discount_percent,
     )
     duration_range_config = DurationRangeConfig(min_days=10, max_days=365, pricing=pricing_config)
@@ -100,8 +106,9 @@ def _settings_with_discount(discount_percent: int):
 
 
 # ---------------------------------------------------------------------------
-# Control prices: exact values from the business spec.
-# formula: base_price(D) = 1499 + (D - 15) * (2299 - 1499) / (30 - 15)
+# Control prices: exact values from the business spec (GE passenger_car's
+# own 15d/30d prices as the two reference points).
+# formula: base_price(D) = 1349 + (D - 15) * (2149 - 1349) / (30 - 15)
 # rounding: ROUND_HALF_UP to whole RUB.
 # ---------------------------------------------------------------------------
 
@@ -109,13 +116,13 @@ def _settings_with_discount(discount_percent: int):
 @pytest.mark.parametrize(
     "duration_days,expected_rub",
     [
-        (10, 1232),
-        (15, 1499),
-        (30, 2299),
-        (45, 3099),
-        (90, 5499),
-        (180, 10299),
-        (365, 20166),
+        (10, 1082),
+        (15, 1349),
+        (30, 2149),
+        (45, 2949),
+        (90, 5349),
+        (180, 10149),
+        (365, 20016),
     ],
 )
 def test_am_control_prices_exact(real_config, duration_days, expected_rub):
@@ -124,11 +131,11 @@ def test_am_control_prices_exact(real_config, duration_days, expected_rub):
 
 
 def test_am_15_days_returns_reference_price_1_exactly(real_config):
-    assert resolve_duration_price(get_settings(), "AM", "passenger_car", 15) == 149900
+    assert resolve_duration_price(get_settings(), "AM", "passenger_car", 15) == 134900
 
 
 def test_am_30_days_returns_reference_price_2_exactly(real_config):
-    assert resolve_duration_price(get_settings(), "AM", "passenger_car", 30) == 229900
+    assert resolve_duration_price(get_settings(), "AM", "passenger_car", 30) == 214900
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +172,7 @@ def test_am_10_days_accepted_and_priced(real_config):
     response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(10)}, follow_redirects=False)
     assert response.status_code == 303
     draft = _read_draft(client)
-    assert draft["price_customer_minor"] == 123200
+    assert draft["price_customer_minor"] == 108200
 
 
 def test_am_365_days_accepted_and_priced(real_config):
@@ -175,7 +182,7 @@ def test_am_365_days_accepted_and_priced(real_config):
     response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(365)}, follow_redirects=False)
     assert response.status_code == 303
     draft = _read_draft(client)
-    assert draft["price_customer_minor"] == 2016600
+    assert draft["price_customer_minor"] == 2001600
 
 
 def test_am_366_days_still_rejected(real_config):
@@ -196,23 +203,23 @@ def test_am_zero_discount_is_a_no_op(real_config):
     settings = get_settings()
     config = settings.pricing.duration_ranges_by_country_category["AM"]["passenger_car"]
     assert config.pricing.discount_percent == 0
-    assert resolve_duration_price(settings, "AM", "passenger_car", 90) == 549900
+    assert resolve_duration_price(settings, "AM", "passenger_car", 90) == 534900
 
 
 def test_am_discount_10_percent_with_fractional_intermediate_rounds_half_up():
-    """90d base price is 5499 RUB (exact). 10% off: 5499 * 90 / 100 = 4949.1
+    """90d base price is 5349 RUB (exact). 10% off: 5349 * 90 / 100 = 4814.1
     RUB exactly -- a fractional RUB amount, per the business spec's own
-    worked example -- must round (half up) to 4949 RUB = 494900 minor units,
-    never truncate to 4949 by flooring or round to 4950."""
+    worked example -- must round (half up) to 4814 RUB = 481400 minor units,
+    never truncate to 4814 by flooring or round to 4815."""
     settings = _settings_with_discount(10)
-    assert resolve_duration_price(settings, "AM", "passenger_car", 90) == 494900
+    assert resolve_duration_price(settings, "AM", "passenger_car", 90) == 481400
 
 
-def test_am_discount_10_percent_on_an_already_whole_result():
-    """30d base price is 2299 RUB. 10% off: 2299 * 90 / 100 = 2069.1 ->
-    2069 RUB half-up."""
+def test_am_discount_10_percent_on_a_second_reference_point():
+    """30d base price is 2149 RUB. 10% off: 2149 * 90 / 100 = 1934.1 ->
+    1934 RUB half-up."""
     settings = _settings_with_discount(10)
-    assert resolve_duration_price(settings, "AM", "passenger_car", 30) == 206900
+    assert resolve_duration_price(settings, "AM", "passenger_car", 30) == 193400
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +239,7 @@ def test_am_full_flow_price_populates_draft_then_flows_to_order_summary_and_paym
     response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(90)}, follow_redirects=False)
     assert response.status_code == 303
     draft = _read_draft(client)
-    assert draft["price_customer_minor"] == 549900
+    assert draft["price_customer_minor"] == 534900
 
     client.post("/method", data={"choice": "manual"})
     client.post(
@@ -259,17 +266,17 @@ def test_am_full_flow_price_populates_draft_then_flows_to_order_summary_and_paym
         conn.close()
     assert order.country_code == "AM"
     assert order.period_code is None
-    assert order.price_customer_minor == 549900
+    assert order.price_customer_minor == 534900
 
     summary = client.get(f"/o/{resume_token}/summary")
     assert summary.status_code == 200
-    assert "5 499" in summary.text
+    assert "5 349" in summary.text
     assert "90 дней" in summary.text
 
     client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
     payment = client.get(f"/o/{resume_token}/payment")
     assert payment.status_code == 200
-    assert "5 499" in payment.text
+    assert "5 349" in payment.text
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +316,7 @@ def test_am_edit_date_recalculates_price_and_updates_order_snapshot(real_config)
         order = get_order_by_token(conn, resume_token)
     finally:
         conn.close()
-    assert order.price_customer_minor == 229900  # 30d = 2299 RUB
+    assert order.price_customer_minor == 214900  # 30d = 2149 RUB
 
     edit_response = client.post(
         f"/o/{resume_token}/edit-date",
@@ -324,7 +331,7 @@ def test_am_edit_date_recalculates_price_and_updates_order_snapshot(real_config)
     finally:
         conn.close()
     assert updated_order.end_date.isoformat() == _iso(45)
-    assert updated_order.price_customer_minor == 309900  # 45d = 3099 RUB
+    assert updated_order.price_customer_minor == 294900  # 45d = 2949 RUB
 
 
 def test_am_edit_date_below_min_days_rejected_and_order_unchanged(real_config):
@@ -372,7 +379,7 @@ def test_am_edit_date_below_min_days_rejected_and_order_unchanged(real_config):
     finally:
         conn.close()
     assert order.end_date.isoformat() == _iso(30)  # unchanged
-    assert order.price_customer_minor == 229900  # unchanged, 30d = 2299 RUB
+    assert order.price_customer_minor == 214900  # unchanged, 30d = 2149 RUB
 
 
 # ---------------------------------------------------------------------------
@@ -424,18 +431,18 @@ def test_am_homepage_no_longer_shows_the_operator_only_placeholder(real_config):
 
 
 def test_am_homepage_teaser_shows_price_at_min_days(real_config):
-    """min_days=10 -> 1232 RUB (see test_am_control_prices_exact) -- the
+    """min_days=10 -> 1082 RUB (see test_am_control_prices_exact) -- the
     teaser must show the SAME number the real /date step would compute for
     a 10-day booking, proving app.web.routes.landing calls
-    resolve_duration_price() rather than hardcoding 1232."""
+    resolve_duration_price() rather than hardcoding 1082."""
     duration_range_config = get_settings().pricing.duration_ranges_by_country_category["AM"]["passenger_car"]
     expected_minor = resolve_duration_price(get_settings(), "AM", "passenger_car", duration_range_config.min_days)
-    assert expected_minor == 123200  # sanity: still the control value from the formula
+    assert expected_minor == 108200  # sanity: still the control value from the formula
 
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert "от 1 232 ₽" in response.text
+    assert "от 1 082 ₽" in response.text
 
 
 def test_ge_homepage_unaffected_by_am_public_launch(real_config):

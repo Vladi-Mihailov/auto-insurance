@@ -155,51 +155,104 @@ pricing:
 # country -> which internal vehicle_category_code values are enabled for that
 # country's checkout (see app.catalog.repository.list_categories's
 # allowed_codes param). A country absent here (Georgia) is UNRESTRICTED --
-# every category the catalog has stays exactly as it is today. AM/TR are
-# deliberately narrowed to passenger_car only for now: this is an MVP scope
-# limit (their engine-power/duration/pricing data for other categories isn't
-# confirmed yet -- see the GE/AM/TR gap-analysis report), NOT a claim that
-# motorcycle/trailer/truck/bus/special_vehicle aren't insurable in Armenia or
-# Turkey. Add more codes here later; no checkout/route code changes needed.
+# every category the catalog has stays exactly as it is today. TR stays
+# narrowed to passenger_car only for now (an MVP scope limit -- its
+# engine-power/duration/pricing data for other categories isn't confirmed
+# yet). AM is now open for all six categories (business confirmed 2026-09-06
+# that Armenia's tariff grid is literally Georgia's own, per category -- see
+# duration_ranges.AM below). Add more codes here later; no checkout/route
+# code changes needed.
 catalog:
   enabled_category_codes_by_country:
-    AM: ["passenger_car"]
+    AM: ["passenger_car", "motorcycle", "bus", "truck", "trailer", "special_vehicle"]
     TR: ["passenger_car"]
 
 # country -> vehicle_category_code -> {min_days, max_days} -- EXACT DATE
 # RANGE products (currently only Armenia's foreign-vehicle CMTPL, per the
 # gap-analysis report: 10-day minimum, confirmed by law HO-63-N Art. 6.2 +
 # Nairi Insurance + the State Revenue Committee's border guide; 365-day
-# maximum, same ceiling as domestic policies). A (country, category) pair
-# here must NOT also appear under pricing.<country>.<category> above -- it's
-# one product model or the other, never both (see
-# app.pricing.provider.get_duration_range, checked before available_periods
-# everywhere this matters).
+# maximum, same ceiling as domestic policies -- same for every category,
+# not category-specific). A (country, category) pair here must NOT also
+# appear under pricing.<country>.<category> above -- it's one product model
+# or the other, never both (see app.pricing.provider.get_duration_range,
+# checked before available_periods everywhere this matters).
 #
-# pricing (linear daily price + percent discount) confirmed by business on
-# 2026-08-29: two reference points (15d=1499 RUB, 30d=2299 RUB) define a
-# straight RUB-per-day line, applied across the FULL 10-365 day range --
-# every individual day count is computed from the formula, never bucketed
-# into brackets, and days outside 15-30 are intentionally extrapolated, not
-# rejected. See app.pricing.provider.resolve_duration_price for the exact
-# rounding order (base price rounded first, then discount applied and
-# rounded again; ROUND_HALF_UP; Decimal/Fraction only, never float).
-# discount_percent: 0 means no discount is currently active.
+# pricing (linear daily price + percent discount): business confirmed on
+# 2026-09-06 that Armenia's tariff grid is LITERALLY Georgia's own tariff
+# grid for the corresponding category -- reference_price_rub_1/2 below are
+# copied directly from this same file's pricing.GE.<category> 15d/30d
+# entries, no markup, no separate AM business data. Two reference points
+# define a straight RUB-per-day line, applied across the FULL 10-365 day
+# range -- every individual day count is computed from the formula, never
+# bucketed into brackets, and days outside 15-30 are intentionally
+# extrapolated, not rejected. See app.pricing.provider.resolve_duration_price
+# for the exact rounding order (base price rounded first, then discount
+# applied and rounded again; ROUND_HALF_UP; Decimal/Fraction only, never
+# float). discount_percent: 0 means no discount is currently active.
+# default_duration_days pre-fills end_date on the FIRST view of a fresh
+# /date draft only (start_date + this many days) -- see
+# app.web.checkout_routes.get_date_step. Never overwrites dates a customer
+# already chose, and has no bearing on the min_days/max_days validation
+# above, which stays enforced exactly as before regardless of this default.
 duration_ranges:
   AM:
     passenger_car:
       min_days: 10
       max_days: 365
-      # Pre-fills end_date on the FIRST view of a fresh /date draft only
-      # (start_date + this many days) -- see
-      # app.web.checkout_routes.get_date_step. Never overwrites dates a
-      # customer already chose, and has no bearing on the 10-365 day
-      # min_days/max_days validation above, which stays enforced exactly as
-      # before regardless of this default.
       default_duration_days: 15
       pricing:
         reference_days_1: 15
-        reference_price_rub_1: 1499
+        reference_price_rub_1: 1349
         reference_days_2: 30
-        reference_price_rub_2: 2299
+        reference_price_rub_2: 2149
+    motorcycle:
+      min_days: 10
+      max_days: 365
+      default_duration_days: 15
+      pricing:
+        reference_days_1: 15
+        reference_price_rub_1: 1059
+        reference_days_2: 30
+        reference_price_rub_2: 1549
+    bus:
+      min_days: 10
+      max_days: 365
+      default_duration_days: 15
+      pricing:
+        reference_days_1: 15
+        reference_price_rub_1: 1999
+        reference_days_2: 30
+        reference_price_rub_2: 3199
+    truck:
+      min_days: 10
+      max_days: 365
+      default_duration_days: 15
+      pricing:
+        reference_days_1: 15
+        reference_price_rub_1: 2699
+        reference_days_2: 30
+        reference_price_rub_2: 4299
+    trailer:
+      min_days: 10
+      max_days: 365
+      default_duration_days: 15
+      pricing:
+        reference_days_1: 15
+        reference_price_rub_1: 849
+        reference_days_2: 30
+        reference_price_rub_2: 1249
+    # special_vehicle's reference prices happen to equal passenger_car's --
+    # GE's own config for this category carries the identical note: a
+    # coincidence in the confirmed business tariffs, not a
+    # formula/reference/multiplier tied to passenger_car. Kept as its own
+    # independent block for that reason, not an alias.
+    special_vehicle:
+      min_days: 10
+      max_days: 365
+      default_duration_days: 15
+      pricing:
+        reference_days_1: 15
+        reference_price_rub_1: 1349
+        reference_days_2: 30
+        reference_price_rub_2: 2149
         discount_percent: 0
