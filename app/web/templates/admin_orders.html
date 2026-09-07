@@ -64,6 +64,7 @@
       </div>
       <a href="{{ row.tpl_issuance.bog_payment_url }}" target="_blank" rel="noopener noreferrer" class="btn btn--primary btn--lg btn--block">Оплатить TPL</a>
       <p class="step__text">Ссылка действует ограниченное время. Откройте её и завершите оплату сразу.</p>
+      <p class="step__text">Откроется Bank of Georgia. Данные карты будут заполнены на компьютере оператора. Введите SMS-код банка вручную.</p>
       <form method="post" action="/admin/orders/{{ row.order.resume_token }}/tpl/issue">
         <button type="submit" class="btn btn--ghost btn--lg btn--block">Получить новую ссылку</button>
       </form>

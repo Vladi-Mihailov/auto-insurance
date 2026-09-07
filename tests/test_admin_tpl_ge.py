@@ -235,6 +235,22 @@ def test_clicking_issue_creates_application_moves_order_and_shows_pay_button(adm
     assert "Оплатить TPL" in card
     # Jinja2 autoescapes "&" to "&amp;" in HTML attribute output.
     assert "https://mpi.gc.ge/page1?merch_id=abc&amp;o.id=xyz" in card
+
+    # The link itself is unchanged by the card-autofill extension work: a
+    # plain new-tab link straight to the stored BOG URL -- no iframe, no
+    # proxying through our server, and nothing card-related appended to it.
+    import re
+
+    href_match = re.search(r'<a href="([^"]+)"[^>]*>Оплатить TPL</a>', card)
+    assert href_match, "expected a plain <a href> link for Оплатить TPL"
+    assert href_match.group(1) == "https://mpi.gc.ge/page1?merch_id=abc&amp;o.id=xyz"
+    assert 'target="_blank"' in card
+    assert "<iframe" not in card
+    assert "pan=" not in card.lower() and "cvc=" not in card.lower() and "cvv=" not in card.lower()
+
+    # The new operator guidance line is present, making clear the server
+    # itself has no role in filling the card.
+    assert "Данные карты будут заполнены на компьютере оператора" in card
     assert "Получить новую ссылку" in card
     assert "Оплата TPL завершена" in card
     assert "Ссылка действует ограниченное время" in card

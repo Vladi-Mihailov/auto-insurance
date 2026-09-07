@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>TPL/BOG Card Autofill</title>
+  <style>
+    body { font-family: system-ui, sans-serif; width: 300px; padding: 12px; font-size: 13px; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    label { display: block; margin-top: 8px; font-size: 12px; color: #333; }
+    input { width: 100%; box-sizing: border-box; padding: 4px 6px; margin-top: 2px; }
+    .row { display: flex; gap: 8px; }
+    .row > div { flex: 1; }
+    button { margin-top: 10px; width: 100%; padding: 6px; cursor: pointer; }
+    #status { margin-top: 10px; font-size: 12px; white-space: pre-line; }
+    .warning { margin-top: 10px; font-size: 11px; color: #7a5b00; background: #fff6e0; padding: 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>TPL/BOG Card Autofill</h1>
+
+  <label>Номер карты (PAN)
+    <input type="text" id="pan" autocomplete="off" inputmode="numeric">
+  </label>
+  <div class="row">
+    <div>
+      <label>MM
+        <input type="text" id="expiryMonth" autocomplete="off" inputmode="numeric" maxlength="2">
+      </label>
+    </div>
+    <div>
+      <label>YY
+        <input type="text" id="expiryYear" autocomplete="off" inputmode="numeric" maxlength="2">
+      </label>
+    </div>
+    <div>
+      <label>CVC
+        <input type="text" id="cvc" autocomplete="off" inputmode="numeric" maxlength="4">
+      </label>
+    </div>
+  </div>
+  <label>Имя владельца (необязательно)
+    <input type="text" id="cardholder" autocomplete="off">
+  </label>
+
+  <button id="save">Сохранить на эту сессию браузера</button>
+  <button id="clear">Очистить сохранённые данные</button>
+  <button id="fill">Заполнить на текущей странице</button>
+
+  <div id="status"></div>
+  <div class="warning">
+    Данные хранятся только в памяти браузера (chrome.storage.session) и стираются при закрытии браузера.
+    Это НЕ зашифрованное хранилище — не оставляйте это устройство без присмотра.
+    Заполнение работает только на подтверждённой странице оплаты mpi.gc.ge/page1 и никогда не отправляет
+    данные карты на какой-либо сервер, включая osagogo24.ru.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

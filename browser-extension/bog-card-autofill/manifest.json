@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "TPL/BOG Card Autofill (private, operator-only)",
+  "version": "1.0.0",
+  "description": "Fills the company card into the confirmed Bank of Georgia TPL payment page only. Never submits, never touches OTP/3DS, never contacts osagogo24.ru. Card data lives only in this browser's memory-only session storage -- never written to disk.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://mpi.gc.ge/page1*"],
+  "content_scripts": [
+    {
+      "matches": ["https://mpi.gc.ge/page1*"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TPL/BOG Card Autofill"
+  },
+  "minimum_chrome_version": "102"
+}
