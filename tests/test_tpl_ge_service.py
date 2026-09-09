@@ -16,6 +16,8 @@ from app.integrations.tpl_ge import service
 from app.integrations.tpl_ge.errors import (
     BogHandoffError,
     MissingRequiredDataError,
+    PolicyNotReadyError,
+    PolicyRetrievalError,
     ProductNotFoundError,
     TplApplicationError,
     TplIssuanceError,
@@ -465,8 +467,307 @@ def test_issue_tpl_policy_bog_handoff_failure_does_not_erase_application_created
     assert calls["create_application"] == 1
 
 
+def test_issue_tpl_policy_extracts_and_persists_tpl_o_id(conn, catalog_ids, monkeypatch, configured_settings):
+    _patch_http_layer(monkeypatch)
+    order = _paid_order(conn, catalog_ids)
+    issuance = service.issue_tpl_policy(conn, order, _settings_with(configured_settings))
+    assert issuance.tpl_o_id == "xyz"  # from the fixture bog_payment_url's own "o.id=xyz"
+
+
 def _settings_with(tpl_ge: TplGeSettings):
     from app.deps import get_settings
 
     base = get_settings()
     return base.model_copy(update={"tpl_ge": tpl_ge})
+
+
+# ---------------------------------------------------------------------------
+# extract_o_id
+# ---------------------------------------------------------------------------
+
+
+def test_extract_o_id_reads_the_literal_o_dot_id_query_key():
+    url = "https://mpi.gc.ge/page1?merch_id=abc&o.id=c709d981-f5c4-44f9-bf10-d5d501ae0dc5&id=POS1"
+    assert service.extract_o_id(url) == "c709d981-f5c4-44f9-bf10-d5d501ae0dc5"
+
+
+def test_extract_o_id_returns_none_when_absent():
+    assert service.extract_o_id("https://mpi.gc.ge/page1?merch_id=abc") is None
+
+
+# ---------------------------------------------------------------------------
+# _classify_documents
+# ---------------------------------------------------------------------------
+
+
+def test_classify_documents_by_document_type():
+    documents = [
+        {"documentType": "Policy", "file": "irrelevant.pdf", "url": "https://ext-stream.tpl.ge/x/policy-TPL1.pdf"},
+        {"documentType": "Invoice", "file": "irrelevant.pdf", "url": "https://ext-stream.tpl.ge/x/invoice-TPL1.pdf"},
+        {"documentType": "Additional", "file": "irrelevant.pdf", "url": "https://ext-stream.tpl.ge/x/additionalterms-TPL1.pdf"},
+    ]
+    classified = service._classify_documents(documents)
+    assert classified == {
+        "policy": "https://ext-stream.tpl.ge/x/policy-TPL1.pdf",
+        "invoice": "https://ext-stream.tpl.ge/x/invoice-TPL1.pdf",
+        "additional_terms": "https://ext-stream.tpl.ge/x/additionalterms-TPL1.pdf",
+    }
+
+
+def test_classify_documents_falls_back_to_filename_prefix():
+    """The INLINE documents[] on GET /api/policies/{o.id} has no
+    documentType field at all (confirmed real evidence) -- classification
+    must still work from the filename alone."""
+    documents = [
+        {"file": "policy-TPL1.pdf", "url": "https://ext-stream.tpl.ge/x/policy-TPL1.pdf"},
+        {"file": "invoice-TPL1.pdf", "url": "https://ext-stream.tpl.ge/x/invoice-TPL1.pdf"},
+        {"file": "additionalterms-TPL1.pdf", "url": "https://ext-stream.tpl.ge/x/additionalterms-TPL1.pdf"},
+    ]
+    classified = service._classify_documents(documents)
+    assert classified["policy"].endswith("policy-TPL1.pdf")
+    assert classified["invoice"].endswith("invoice-TPL1.pdf")
+    assert classified["additional_terms"].endswith("additionalterms-TPL1.pdf")
+
+
+def test_classify_documents_skips_unrecognized_documents_rather_than_guessing():
+    documents = [{"documentType": "SomethingNew", "file": "mystery.pdf", "url": "https://ext-stream.tpl.ge/x/mystery.pdf"}]
+    assert service._classify_documents(documents) == {}
+
+
+def test_classify_documents_skips_documents_with_no_url():
+    documents = [{"documentType": "Policy", "file": "policy-TPL1.pdf"}]
+    assert service._classify_documents(documents) == {}
+
+
+# ---------------------------------------------------------------------------
+# retrieve_issued_policy
+# ---------------------------------------------------------------------------
+
+_ISSUED_POLICY_RESPONSE = {
+    "policyNumber": "TPL7635945",
+    "policyId": 1234567,
+    "issueDate": "2026-09-09T15:45:33",
+    "startDate": "2026-09-09T15:45:33",
+    "endDate": "2026-10-08T23:59:59",
+    "documents": [
+        {"file": "policy-TPL7635945.pdf", "url": "https://ext-stream.tpl.ge/policies//abc/policy-TPL7635945.pdf"},
+        {"file": "invoice-TPL7635945.pdf", "url": "https://ext-stream.tpl.ge/policies//abc/invoice-TPL7635945.pdf"},
+    ],
+}
+_DETAILED_DOCUMENTS_RESPONSE = [
+    {"documentType": "Policy", "file": "policy-TPL7635945.pdf", "url": "https://ext-stream.tpl.ge/policies//abc/policy-TPL7635945.pdf"},
+    {"documentType": "Invoice", "file": "invoice-TPL7635945.pdf", "url": "https://ext-stream.tpl.ge/policies//abc/invoice-TPL7635945.pdf"},
+]
+
+
+def _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings):
+    """Gets an order all the way to BOG_LINK_READY (tpl_o_id populated) --
+    the precondition retrieve_issued_policy needs -- without touching BOG
+    itself."""
+    _patch_http_layer(monkeypatch)
+    order = _paid_order(conn, catalog_ids)
+    service.issue_tpl_policy(conn, order, _settings_with(configured_settings))
+    return get_order_by_id(conn, order.id)
+
+
+def _patch_policy_lookup(monkeypatch, *, policy=None, documents=None, fetch_policy_error=None, fetch_documents_error=None):
+    monkeypatch.setattr(service.tpl_client, "new_client", lambda: _FakeClient())
+    calls = {"fetch_policy": 0, "fetch_policy_documents": 0}
+
+    def _fetch_policy(client, o_id):
+        calls["fetch_policy"] += 1
+        if fetch_policy_error:
+            raise fetch_policy_error
+        return policy
+
+    def _fetch_documents(client, o_id):
+        calls["fetch_policy_documents"] += 1
+        if fetch_documents_error:
+            raise fetch_documents_error
+        return documents
+
+    monkeypatch.setattr(service.tpl_client, "fetch_policy", _fetch_policy)
+    monkeypatch.setattr(service.tpl_client, "fetch_policy_documents", _fetch_documents)
+    return calls
+
+
+def test_retrieve_issued_policy_parses_and_persists_issued_policy(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    _patch_policy_lookup(monkeypatch, policy=_ISSUED_POLICY_RESPONSE, documents=_DETAILED_DOCUMENTS_RESPONSE)
+
+    issuance = service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+
+    assert issuance.policy_number == "TPL7635945"
+    assert issuance.tpl_policy_id == 1234567
+    assert issuance.policy_document_url == "https://ext-stream.tpl.ge/policies//abc/policy-TPL7635945.pdf"
+    assert issuance.invoice_document_url == "https://ext-stream.tpl.ge/policies//abc/invoice-TPL7635945.pdf"
+    assert issuance.additional_terms_document_url is None  # none provided in this fixture
+    assert issuance.is_policy_retrieved
+    assert issuance.policy_retrieved_at is not None
+
+
+def test_retrieve_issued_policy_uses_the_exact_url_tpl_provided_never_constructed(conn, catalog_ids, monkeypatch, configured_settings):
+    """Never build an ext-stream.tpl.ge path ourselves -- whatever URL TPL's
+    own response contains is stored verbatim."""
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    custom_documents = [
+        {"documentType": "Policy", "file": "policy-TPL7635945.pdf", "url": "https://ext-stream.tpl.ge/some/unexpected/path/policy-TPL7635945.pdf"},
+    ]
+    _patch_policy_lookup(monkeypatch, policy=_ISSUED_POLICY_RESPONSE, documents=custom_documents)
+
+    issuance = service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+    assert issuance.policy_document_url == "https://ext-stream.tpl.ge/some/unexpected/path/policy-TPL7635945.pdf"
+
+
+def test_retrieve_issued_policy_raises_not_ready_when_policy_number_missing(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    not_ready_response = {"policyNumber": None, "documents": []}
+    _patch_policy_lookup(monkeypatch, policy=not_ready_response, documents=[])
+
+    with pytest.raises(PolicyNotReadyError):
+        service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert not issuance.is_policy_retrieved
+    assert issuance.is_bog_link_ready  # not-ready must not corrupt/downgrade issuance_status
+
+
+def test_retrieve_issued_policy_raises_not_ready_when_documents_empty(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    partial_response = {"policyNumber": "TPL7635945", "documents": []}
+    _patch_policy_lookup(monkeypatch, policy=partial_response, documents=[])
+
+    with pytest.raises(PolicyNotReadyError):
+        service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+
+
+def test_retrieve_issued_policy_raises_retrieval_error_on_malformed_response(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    _patch_policy_lookup(
+        monkeypatch,
+        fetch_policy_error=service.tpl_client.PolicyLookupHttpError("simulated 500"),
+    )
+
+    with pytest.raises(PolicyRetrievalError):
+        service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert not issuance.is_policy_retrieved
+    assert issuance.is_bog_link_ready  # a genuine error must not corrupt issuance_status either
+
+
+def test_retrieve_issued_policy_raises_retrieval_error_when_documents_endpoint_fails(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    _patch_policy_lookup(
+        monkeypatch,
+        policy=_ISSUED_POLICY_RESPONSE,
+        fetch_documents_error=service.tpl_client.PolicyLookupHttpError("simulated 500"),
+    )
+
+    with pytest.raises(PolicyRetrievalError):
+        service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+
+
+def test_retrieve_issued_policy_requires_a_tpl_o_id_on_file(conn, catalog_ids, monkeypatch, configured_settings):
+    """An order that never got a BOG link at all (no tpl_o_id yet) must be
+    rejected clearly, not attempt a lookup with a missing/None o.id."""
+    _patch_http_layer(monkeypatch)
+    order = _paid_order(conn, catalog_ids)
+    # Order stays PAID -- issue_tpl_policy is deliberately never called, so
+    # no issuance row (and therefore no tpl_o_id) exists yet.
+    with pytest.raises(TplIssuanceError):
+        service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+
+
+def test_retrieve_issued_policy_is_idempotent_and_does_not_refetch_by_default(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    calls = _patch_policy_lookup(monkeypatch, policy=_ISSUED_POLICY_RESPONSE, documents=_DETAILED_DOCUMENTS_RESPONSE)
+
+    first = service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+    refreshed = get_order_by_id(conn, order.id)
+    second = service.retrieve_issued_policy(conn, refreshed, _settings_with(configured_settings))
+
+    assert calls["fetch_policy"] == 1  # never called a second time
+    assert calls["fetch_policy_documents"] == 1
+    assert first.policy_number == second.policy_number == "TPL7635945"
+
+
+def test_retrieve_issued_policy_can_be_forced_to_refetch(conn, catalog_ids, monkeypatch, configured_settings):
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+    calls = _patch_policy_lookup(monkeypatch, policy=_ISSUED_POLICY_RESPONSE, documents=_DETAILED_DOCUMENTS_RESPONSE)
+
+    service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))
+    refreshed = get_order_by_id(conn, order.id)
+    service.retrieve_issued_policy(conn, refreshed, _settings_with(configured_settings), force=True)
+
+    assert calls["fetch_policy"] == 2
+
+
+def test_retrieve_issued_policy_never_calls_bog_or_payment_functions(conn, catalog_ids, monkeypatch, configured_settings):
+    """No BOG/payment behaviour is touched by this new capability."""
+    order = _issue_and_pay(conn, catalog_ids, monkeypatch, configured_settings)
+
+    def _boom_create(client, payload):
+        raise AssertionError("must never call create_application")
+
+    def _boom_initiate(client, params):
+        raise AssertionError("must never call initiate_bog_payment")
+
+    monkeypatch.setattr(service.tpl_client, "create_application", _boom_create)
+    monkeypatch.setattr(service.tpl_client, "initiate_bog_payment", _boom_initiate)
+    _patch_policy_lookup(monkeypatch, policy=_ISSUED_POLICY_RESPONSE, documents=_DETAILED_DOCUMENTS_RESPONSE)
+
+    service.retrieve_issued_policy(conn, order, _settings_with(configured_settings))  # must not raise
+
+
+def test_existing_issuance_row_without_new_columns_still_loads(conn, catalog_ids):
+    """A row written before this migration (raw insert touching only the
+    original columns) must still load cleanly -- the new columns read back
+    as None, not a crash."""
+    order = _paid_order(conn, catalog_ids)
+    conn.execute(
+        """
+        INSERT INTO insurance_tpl_issuance (order_id, tpl_uid, issuance_status, created_at, updated_at)
+        VALUES (?, 'legacy-uid', 'bog_link_ready', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+        """,
+        (order.id,),
+    )
+    conn.commit()
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert issuance.tpl_o_id is None
+    assert issuance.policy_number is None
+    assert issuance.tpl_policy_id is None
+    assert issuance.policy_document_url is None
+    assert issuance.invoice_document_url is None
+    assert issuance.additional_terms_document_url is None
+    assert issuance.policy_retrieved_at is None
+    assert not issuance.is_policy_retrieved
+
+
+# ---------------------------------------------------------------------------
+# download_policy_pdf
+# ---------------------------------------------------------------------------
+
+
+def test_download_policy_pdf_delegates_to_the_client_with_the_given_url(monkeypatch):
+    calls = []
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(service.tpl_client, "new_client", lambda: _Client())
+
+    def _fake_download(client, url):
+        calls.append(url)
+        return b"%PDF-1.4 fake"
+
+    monkeypatch.setattr(service.tpl_client, "download_document", _fake_download)
+
+    content = service.download_policy_pdf("https://ext-stream.tpl.ge/policies//abc/policy-TPL1.pdf")
+
+    assert content == b"%PDF-1.4 fake"
+    assert calls == ["https://ext-stream.tpl.ge/policies//abc/policy-TPL1.pdf"]

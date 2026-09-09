@@ -198,9 +198,35 @@ _MANUFACTURER_COLUMN_MIGRATIONS = [
     ("models_synced_at", "TEXT"),
 ]
 
+# Post-payment policy retrieval (GET /api/policies/{o.id} and .../documents --
+# see app.integrations.tpl_ge.service.retrieve_issued_policy). tpl_o_id is
+# the TPL-server-issued identifier the BOG handoff mints (confirmed, via real
+# HAR evidence, DISTINCT from tpl_uid) -- it previously existed only embedded
+# inside bog_payment_url's own query string, never as its own column; this
+# migration is what gives it one, extracted once per successful BOG handoff
+# (see service._refresh_bog_link) so retrieval never has to re-parse a URL.
+# tpl_policy_id is TPL's own internal numeric policy id (distinct from both
+# tpl_uid and tpl_o_id, and from the human-facing policy_number). The three
+# *_document_url columns are classified straight from TPL's own response
+# (see service._classify_documents) -- never constructed from a guessed URL
+# pattern. policy_retrieved_at is the "have we successfully retrieved this
+# already" marker a repeat call checks before ever calling TPL again (see
+# service.retrieve_issued_policy's idempotency guard) -- NULL means "not yet
+# retrieved", exactly like insurance_manufacturers.models_synced_at above.
+_TPL_ISSUANCE_COLUMN_MIGRATIONS = [
+    ("tpl_o_id", "TEXT"),
+    ("policy_number", "TEXT"),
+    ("tpl_policy_id", "INTEGER"),
+    ("policy_document_url", "TEXT"),
+    ("invoice_document_url", "TEXT"),
+    ("additional_terms_document_url", "TEXT"),
+    ("policy_retrieved_at", "TEXT"),
+]
+
 _COLUMN_MIGRATIONS = {
     "insurance_orders": _ORDER_COLUMN_MIGRATIONS,
     "insurance_manufacturers": _MANUFACTURER_COLUMN_MIGRATIONS,
+    "insurance_tpl_issuance": _TPL_ISSUANCE_COLUMN_MIGRATIONS,
 }
 
 

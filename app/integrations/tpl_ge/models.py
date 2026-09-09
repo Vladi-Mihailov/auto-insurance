@@ -31,6 +31,22 @@ class TplIssuance:
     last_error: str | None
     created_at: datetime
     updated_at: datetime
+    # TPL-server-issued identifier minted by the BOG handoff (GET /ecommerce/bog)
+    # -- confirmed DISTINCT from tpl_uid via real HAR evidence. Required to call
+    # GET /api/policies/{o.id}. Overwritten on every successful BOG-link
+    # refresh (a repeat "Получить новую ссылку" mints a fresh one) -- see
+    # service._refresh_bog_link, the only writer.
+    tpl_o_id: str | None = None
+    # Populated only once GET /api/policies/{o.id} confirms the policy is
+    # actually issued (see service.retrieve_issued_policy) -- all six of
+    # these plus policy_retrieved_at are set together, atomically, by
+    # repository.mark_policy_retrieved.
+    policy_number: str | None = None
+    tpl_policy_id: int | None = None
+    policy_document_url: str | None = None
+    invoice_document_url: str | None = None
+    additional_terms_document_url: str | None = None
+    policy_retrieved_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "TplIssuance":
@@ -45,6 +61,13 @@ class TplIssuance:
             last_error=row["last_error"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            tpl_o_id=row["tpl_o_id"],
+            policy_number=row["policy_number"],
+            tpl_policy_id=row["tpl_policy_id"],
+            policy_document_url=row["policy_document_url"],
+            invoice_document_url=row["invoice_document_url"],
+            additional_terms_document_url=row["additional_terms_document_url"],
+            policy_retrieved_at=datetime.fromisoformat(row["policy_retrieved_at"]) if row["policy_retrieved_at"] else None,
         )
 
     @property
@@ -69,6 +92,15 @@ class TplIssuance:
             IssuanceStatus.BOG_LINK_READY.value,
             IssuanceStatus.OPERATOR_REPORTED_PAID.value,
         )
+
+    @property
+    def is_policy_retrieved(self) -> bool:
+        """True once GET /api/policies/{o.id} has successfully confirmed
+        issuance and the policy/document fields are persisted -- the guard
+        service.retrieve_issued_policy checks before calling TPL again (see
+        its own docstring for why a repeat call must not re-fetch by
+        default)."""
+        return self.policy_retrieved_at is not None
 
 
 @dataclass(frozen=True)

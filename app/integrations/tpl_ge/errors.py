@@ -36,3 +36,19 @@ class TplApplicationError(TplIssuanceError):
 
 class BogHandoffError(TplIssuanceError):
     """GET /ecommerce/bog did not return the expected 302 + Location."""
+
+
+class PolicyNotReadyError(TplIssuanceError):
+    """GET /api/policies/{o.id} responded, but the policy isn't issued yet
+    (no policyNumber / no documents) -- confirmed real behaviour is
+    unobserved for this exact window (discovery only ever captured the
+    ALREADY-issued state), so this is a deliberately distinct, non-fatal
+    outcome from PolicyRetrievalError below. Callers must treat this as
+    "try again later", never as a permanent failure -- see
+    service.retrieve_issued_policy."""
+
+
+class PolicyRetrievalError(TplIssuanceError):
+    """GET /api/policies/{o.id} (or .../documents) returned something
+    genuinely unexpected -- a non-2xx status or an unparseable body. Unlike
+    PolicyNotReadyError, this is a real anomaly worth surfacing."""

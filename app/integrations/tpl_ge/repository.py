@@ -53,14 +53,19 @@ def mark_application_created(
     conn.commit()
 
 
-def mark_bog_link_ready(conn: sqlite3.Connection, order_id: int, *, bog_payment_url: str) -> None:
+def mark_bog_link_ready(conn: sqlite3.Connection, order_id: int, *, bog_payment_url: str, tpl_o_id: str | None) -> None:
+    """tpl_o_id is overwritten every call -- a repeat BOG-link refresh mints
+    a genuinely new o.id (confirmed via real HAR evidence: two separate
+    /ecommerce/bog calls for the same tpl_uid returned two DIFFERENT o.id
+    values), so the latest one is always what a later policy retrieval
+    must use."""
     conn.execute(
         """
         UPDATE insurance_tpl_issuance
-        SET issuance_status = ?, bog_payment_url = ?, last_error = NULL, updated_at = ?
+        SET issuance_status = ?, bog_payment_url = ?, tpl_o_id = ?, last_error = NULL, updated_at = ?
         WHERE order_id = ?
         """,
-        (IssuanceStatus.BOG_LINK_READY.value, bog_payment_url, _now(), order_id),
+        (IssuanceStatus.BOG_LINK_READY.value, bog_payment_url, tpl_o_id, _now(), order_id),
     )
     conn.commit()
 
@@ -87,6 +92,46 @@ def mark_failed(conn: sqlite3.Connection, order_id: int, *, error_message: str) 
     conn.execute(
         "UPDATE insurance_tpl_issuance SET issuance_status = ?, last_error = ?, updated_at = ? WHERE order_id = ?",
         (IssuanceStatus.FAILED.value, error_message, _now(), order_id),
+    )
+    conn.commit()
+
+
+def mark_policy_retrieved(
+    conn: sqlite3.Connection,
+    order_id: int,
+    *,
+    policy_number: str,
+    tpl_policy_id: int | None,
+    policy_document_url: str | None,
+    invoice_document_url: str | None,
+    additional_terms_document_url: str | None,
+) -> None:
+    """Persists a confirmed-issued policy's data -- called exactly once per
+    successful GET /api/policies/{o.id} (see service.retrieve_issued_policy,
+    which checks TplIssuance.is_policy_retrieved before ever calling this
+    again). All fields set together, atomically, in one UPDATE -- a single
+    row per order, so there is structurally no way for a retry to create a
+    second/duplicate policy or document record. Deliberately does NOT touch
+    issuance_status -- see IssuanceStatus's own docstring for why this
+    stays an orthogonal concept."""
+    conn.execute(
+        """
+        UPDATE insurance_tpl_issuance
+        SET policy_number = ?, tpl_policy_id = ?, policy_document_url = ?,
+            invoice_document_url = ?, additional_terms_document_url = ?,
+            policy_retrieved_at = ?, last_error = NULL, updated_at = ?
+        WHERE order_id = ?
+        """,
+        (
+            policy_number,
+            tpl_policy_id,
+            policy_document_url,
+            invoice_document_url,
+            additional_terms_document_url,
+            _now(),
+            _now(),
+            order_id,
+        ),
     )
     conn.commit()
 
