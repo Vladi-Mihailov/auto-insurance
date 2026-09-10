@@ -47,6 +47,12 @@ class TplIssuance:
     invoice_document_url: str | None = None
     additional_terms_document_url: str | None = None
     policy_retrieved_at: datetime | None = None
+    # Set only once the Policy PDF is actually confirmed sent to the
+    # operator's Telegram chat (see app.web.admin_routes' delivery helper,
+    # the only writer) -- the idempotency guard against a duplicate send,
+    # while staying NULL (permitting exactly one resend) if a prior
+    # delivery attempt failed.
+    policy_sent_to_operator_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "TplIssuance":
@@ -68,6 +74,9 @@ class TplIssuance:
             invoice_document_url=row["invoice_document_url"],
             additional_terms_document_url=row["additional_terms_document_url"],
             policy_retrieved_at=datetime.fromisoformat(row["policy_retrieved_at"]) if row["policy_retrieved_at"] else None,
+            policy_sent_to_operator_at=(
+                datetime.fromisoformat(row["policy_sent_to_operator_at"]) if row["policy_sent_to_operator_at"] else None
+            ),
         )
 
     @property
@@ -101,6 +110,13 @@ class TplIssuance:
         its own docstring for why a repeat call must not re-fetch by
         default)."""
         return self.policy_retrieved_at is not None
+
+    @property
+    def is_sent_to_operator(self) -> bool:
+        """True once the Policy PDF has been confirmed delivered to the
+        operator's Telegram chat -- the guard against sending it twice
+        (see app.web.admin_routes' delivery helper)."""
+        return self.policy_sent_to_operator_at is not None
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,12 @@ second Telegram client/service:
    app.web.admin_routes.post_admin_confirm_payment, the only caller) -- a
    human operator still has to manually issue the real policy from this;
    PayMaster and tpl.ge policy issuance are NOT integrated at this stage.
+4. notify_operator_policy_ready -- sent once the GE->TPL integration
+   (app.integrations.tpl_ge) confirms an issued policy after the operator
+   reports the TPL/BOG payment complete -- see app.web.admin_routes'
+   delivery helper, the only caller. Unlike the three above, this one
+   sends a DOCUMENT (the Policy PDF, via send_document/_send_file_via_telethon)
+   rather than a plain text message.
 
 Transport is Telethon (an authorized Telegram USER account), not the Bot
 API -- no bot is created or needed. The account is the SAME one already
@@ -49,6 +55,7 @@ sensitive and never appear in any log/exception message here).
 """
 
 import asyncio
+import io
 import logging
 from pathlib import Path
 
@@ -95,6 +102,56 @@ def send_message(*, api_id: int, api_hash: str, session_path: Path, chat_id: int
     try:
         asyncio.run(
             _send_via_telethon(api_id=api_id, api_hash=api_hash, session_path=session_path, chat_id=chat_id, text=text)
+        )
+    except TelegramNotifyError:
+        raise
+    except Exception as exc:
+        raise TelegramNotifyError(f"Telegram send failed: {type(exc).__name__}") from exc
+
+
+async def _send_file_via_telethon(
+    *, api_id: int, api_hash: str, session_path: Path, chat_id: int | str, file_bytes: bytes, filename: str, caption: str
+) -> None:
+    client = TelegramClient(str(session_path), api_id, api_hash)
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            raise TelegramNotifyError(
+                f"Telegram session at {session_path} is not authorized -- run "
+                "`python -m app.notifications.authorize_telegram_operator` once"
+            )
+        # Handed to Telethon entirely in memory -- io.BytesIO with its own
+        # .name attribute set is what Telethon reads as the upload's
+        # filename (documented, supported pattern; no different from
+        # passing a real file path). No temporary file is ever written to
+        # disk for this -- see app.web.admin_routes' delivery helper for
+        # why that's also true one layer up (the PDF bytes themselves are
+        # never persisted anywhere).
+        buffer = io.BytesIO(file_bytes)
+        buffer.name = filename
+        await client.send_file(chat_id, buffer, caption=caption)
+    finally:
+        await client.disconnect()
+
+
+def send_document(
+    *, api_id: int, api_hash: str, session_path: Path, chat_id: int | str, file_bytes: bytes, filename: str, caption: str
+) -> None:
+    """Connect using auto-insurance's own dedicated Telethon session, send
+    one document, disconnect -- same one-shot shape as send_message above.
+    Raises TelegramNotifyError on any failure; never logs the file bytes,
+    api_hash, or phone number."""
+    try:
+        asyncio.run(
+            _send_file_via_telethon(
+                api_id=api_id,
+                api_hash=api_hash,
+                session_path=session_path,
+                chat_id=chat_id,
+                file_bytes=file_bytes,
+                filename=filename,
+                caption=caption,
+            )
         )
     except TelegramNotifyError:
         raise
@@ -261,6 +318,20 @@ def format_payment_claimed_message(order: Order) -> str:
     return "\n".join(lines)
 
 
+def format_policy_ready_caption(order: Order, *, policy_number: str) -> str:
+    """Caption sent alongside the issued Policy PDF -- see
+    app.web.admin_routes' delivery helper, the only caller. Deliberately
+    minimal: public_number (never resume_token, same rule as every other
+    message in this module), registration number, and the policy number --
+    no TPL internal ids (o.id/uId/tpl_policy_id), no document URL, no other
+    customer-sensitive field beyond what already appears elsewhere."""
+    lines = ["✅ Полис TPL оформлен", "", f"Заказ: {order.public_number}"]
+    if order.display_registration_number:
+        lines.append(f"🚗 {order.display_registration_number}")
+    lines.append(f"📄 Полис: {policy_number}")
+    return "\n".join(lines)
+
+
 def _notify_operator(
     *,
     api_id: int | None,
@@ -362,3 +433,45 @@ def notify_operator_order_paid(
     return _notify_operator(
         api_id=api_id, api_hash=api_hash, phone=phone, session_path=session_path, chat_id=chat_id, order=order, text=text
     )
+
+
+def notify_operator_policy_ready(
+    *,
+    api_id: int | None,
+    api_hash: str | None,
+    phone: str | None,
+    session_path: Path,
+    chat_id: int | str | None,
+    order: Order,
+    policy_number: str,
+    pdf_bytes: bytes,
+) -> bool:
+    """Best-effort delivery of the issued Policy PDF to the operator chat --
+    see app.web.admin_routes' delivery helper, the only caller (fires once
+    per order, guarded there by TplIssuance.is_sent_to_operator). Returns
+    True only once Telegram actually confirms the send, False on any
+    failure (including "not configured") -- NEVER raises, same contract as
+    every other notify_operator_* function, so a Telegram outage can never
+    lose the already-persisted policy_number/policy_document_url the
+    caller is reporting on. Failure is logged with a safe classification
+    only -- never the PDF bytes, never the document URL, never the phone/
+    api_hash."""
+    if not api_id or not api_hash or not phone or not chat_id:
+        logger.warning("Telegram PDF delivery skipped: not configured (order %s)", order.public_number)
+        return False
+    caption = format_policy_ready_caption(order, policy_number=policy_number)
+    filename = f"policy-{policy_number}.pdf"
+    try:
+        send_document(
+            api_id=api_id,
+            api_hash=api_hash,
+            session_path=session_path,
+            chat_id=chat_id,
+            file_bytes=pdf_bytes,
+            filename=filename,
+            caption=caption,
+        )
+    except TelegramNotifyError as exc:
+        logger.warning("Telegram PDF delivery failed for order %s: %s", order.public_number, exc)
+        return False
+    return True

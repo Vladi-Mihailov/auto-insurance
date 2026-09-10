@@ -17,7 +17,7 @@ from app.deps import get_db, get_order_or_404, get_settings, require_admin
 from app.integrations.tpl_ge import repository as tpl_ge_repo
 from app.integrations.tpl_ge import service as tpl_ge_service
 from app.integrations.tpl_ge.errors import TplIssuanceError
-from app.notifications.telegram import notify_operator_order_paid
+from app.notifications.telegram import notify_operator_order_paid, notify_operator_policy_ready
 from app.orders.models import Order
 from app.orders.repository import get_latest_transition_at, list_orders_by_status, set_status
 from app.orders.state_machine import OrderStatus
@@ -197,15 +197,72 @@ def post_admin_tpl_mark_paid(
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """"Оплата TPL завершена" -- a manual operator acknowledgement only.
-    Deliberately does NOT move Order.status to POLICY_READY (see
-    app.integrations.tpl_ge.service.report_operator_paid's docstring) --
-    the real success callback / policy number / PDF retrieval mechanism is
-    still unexplored, so the order stays PROCESSING with an updated
-    issuance sub-status the admin page reads to show "Ожидается получение
-    полиса" instead of the payment button."""
+    """"Оплата TPL завершена" (first click) AND "Получить полис повторно"
+    (any later click) -- the same idempotent action, same one-endpoint-
+    serves-both-labels pattern already used by post_admin_tpl_issue above.
+
+    Sequence: record the operator's acknowledgement (idempotent -- see
+    tpl_ge_service.report_operator_paid's own docstring), then, if the
+    policy isn't already retrieved, attempt retrieval with a small bounded
+    retry (tpl_ge_service.retrieve_issued_policy_with_retry -- never an
+    unbounded loop, never re-initiates BOG/creates another application).
+    Once retrieved, deliver the Policy PDF to the operator's Telegram chat
+    exactly once (_deliver_policy_pdf below, guarded by
+    TplIssuance.is_sent_to_operator) -- if that delivery fails, the
+    already-persisted policy_number/policy_document_url are left intact
+    for a later resend (this same route, clicked again).
+
+    Order.status is never moved to POLICY_READY here (still unexplored --
+    see the delivery report's OPEN ITEMS) -- only insurance_tpl_issuance's
+    own fields change; the admin page reads those directly to show the
+    issued policy number."""
+    settings = get_settings()
     try:
-        tpl_ge_service.report_operator_paid(conn, order)
+        issuance = tpl_ge_service.report_operator_paid(conn, order)
     except TplIssuanceError:
-        pass
+        return RedirectResponse("/admin/orders", status_code=303)
+
+    if not issuance.is_policy_retrieved:
+        issuance = tpl_ge_service.retrieve_issued_policy_with_retry(conn, order, settings)
+
+    if issuance.is_policy_retrieved and not issuance.is_sent_to_operator:
+        _deliver_policy_pdf(conn, order, issuance, settings)
+
     return RedirectResponse("/admin/orders", status_code=303)
+
+
+def _deliver_policy_pdf(conn, order: Order, issuance, settings) -> None:
+    """Downloads ONLY the Policy PDF (never Invoice/Additional Terms) using
+    the exact policy_document_url TPL's own API already provided, hands the
+    bytes straight to Telegram, and releases them -- no temporary file, no
+    permanent storage anywhere (see tpl_ge_service.download_policy_pdf's
+    own docstring for why, and the delivery report's PDF STORAGE section).
+    A failure at either step is recorded via tpl_ge_repo.record_error
+    (never raised further, never rolls back the already-persisted
+    policy_number/policy_document_url/policy_retrieved_at) -- the admin
+    page surfaces last_error, and the SAME "Получить полис повторно"
+    action retries delivery on a later click."""
+    if not issuance.policy_document_url:
+        tpl_ge_repo.record_error(conn, order.id, error_message="Policy document URL missing -- cannot deliver PDF")
+        return
+
+    try:
+        pdf_bytes = tpl_ge_service.download_policy_pdf(issuance.policy_document_url)
+    except Exception as exc:
+        tpl_ge_repo.record_error(conn, order.id, error_message=f"Policy PDF download failed: {type(exc).__name__}")
+        return
+
+    sent = notify_operator_policy_ready(
+        api_id=settings.telegram_operator.api_id,
+        api_hash=settings.telegram_operator.api_hash,
+        phone=settings.telegram_operator.phone,
+        session_path=settings.telegram_operator.session_path,
+        chat_id=settings.telegram_operator.chat_id,
+        order=order,
+        policy_number=issuance.policy_number,
+        pdf_bytes=pdf_bytes,
+    )
+    if sent:
+        tpl_ge_repo.mark_policy_sent_to_operator(conn, order.id)
+    else:
+        tpl_ge_repo.record_error(conn, order.id, error_message="Telegram PDF delivery failed")

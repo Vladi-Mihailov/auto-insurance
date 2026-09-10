@@ -221,6 +221,13 @@ _TPL_ISSUANCE_COLUMN_MIGRATIONS = [
     ("invoice_document_url", "TEXT"),
     ("additional_terms_document_url", "TEXT"),
     ("policy_retrieved_at", "TEXT"),
+    # Set only once notify_operator_policy_ready (app.notifications.telegram)
+    # actually confirms the send -- the idempotency guard that keeps a
+    # repeat "Оплата TPL завершена"/"Получить полис повторно" click from
+    # ever delivering the same PDF to Telegram twice, while still allowing
+    # exactly one resend if this stayed NULL because the first attempt
+    # failed (see app.web.admin_routes' delivery helper, the only writer).
+    ("policy_sent_to_operator_at", "TEXT"),
 ]
 
 _COLUMN_MIGRATIONS = {

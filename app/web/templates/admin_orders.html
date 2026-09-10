@@ -55,8 +55,24 @@
 
     {% if row.order.country_code == "GE" and row.order.status in ("paid", "processing") %}
     <div class="summary-actions">
-      {% if row.tpl_issuance and row.tpl_issuance.is_operator_reported_paid %}
-      <p class="step__text">Ожидается получение полиса</p>
+      {% if row.tpl_issuance and row.tpl_issuance.is_policy_retrieved %}
+      <p class="step__text">✅ Полис оформлен</p>
+      <p class="step__text">Полис: {{ row.tpl_issuance.policy_number }}</p>
+      {% if not row.tpl_issuance.is_sent_to_operator %}
+      <p class="form__error">Не удалось отправить полис в Telegram.{{ " " ~ row.tpl_issuance.last_error if row.tpl_issuance.last_error else "" }}</p>
+      <form method="post" action="/admin/orders/{{ row.order.resume_token }}/tpl/mark-paid">
+        <button type="submit" class="btn btn--ghost btn--lg btn--block">Отправить повторно</button>
+      </form>
+      {% endif %}
+      {% elif row.tpl_issuance and row.tpl_issuance.is_operator_reported_paid %}
+      <p class="step__text">⏳ Оплата отмечена. Полис TPL ещё формируется.</p>
+      <p class="step__text">Попробуйте получить полис повторно через несколько секунд.</p>
+      {% if row.tpl_issuance.last_error %}
+      <p class="form__error">{{ row.tpl_issuance.last_error }}</p>
+      {% endif %}
+      <form method="post" action="/admin/orders/{{ row.order.resume_token }}/tpl/mark-paid">
+        <button type="submit" class="btn btn--primary btn--lg btn--block">Получить полис повторно</button>
+      </form>
       {% elif row.tpl_issuance and row.tpl_issuance.is_bog_link_ready %}
       <div class="summary-card__row">
         <span class="summary-card__label">Закупочная цена TPL</span>

@@ -136,6 +136,19 @@ def mark_policy_retrieved(
     conn.commit()
 
 
+def mark_policy_sent_to_operator(conn: sqlite3.Connection, order_id: int) -> None:
+    """Set exactly once, right after app.notifications.telegram.
+    notify_operator_policy_ready actually confirms the send -- see
+    app.web.admin_routes' delivery helper, the only caller. This is the
+    entire duplicate-send guard: a repeat admin click checks
+    TplIssuance.is_sent_to_operator before ever attempting delivery again."""
+    conn.execute(
+        "UPDATE insurance_tpl_issuance SET policy_sent_to_operator_at = ?, last_error = NULL, updated_at = ? WHERE order_id = ?",
+        (_now(), _now(), order_id),
+    )
+    conn.commit()
+
+
 def record_error(conn: sqlite3.Connection, order_id: int, *, error_message: str) -> None:
     """A failure AFTER the TPL application already exists (e.g. a BOG
     handoff refresh attempt failed) -- records last_error without touching

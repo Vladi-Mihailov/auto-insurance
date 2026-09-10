@@ -32,6 +32,7 @@ TPL") or a later one ("Получить новую ссылку").
 
 import re
 import sqlite3
+import time
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -351,12 +352,18 @@ def issue_tpl_policy(conn: sqlite3.Connection, order: Order, settings: Settings)
 def report_operator_paid(conn: sqlite3.Connection, order: Order) -> TplIssuance:
     """"Оплата TPL завершена" -- purely a manual operator acknowledgement
     that they finished the BOG payment themselves. Never sets Order.status
-    to POLICY_READY (the real success callback / PDF retrieval mechanism is
-    still unexplored) -- only advances the issuance sub-status so the admin
-    page can show "Ожидается получение полиса" instead of the payment
-    button."""
+    to POLICY_READY directly (see app.web.admin_routes for what happens
+    next: it drives retrieve_issued_policy_with_retry and, on success, PDF
+    delivery) -- this function's only job is recording the acknowledgement
+    itself.
+
+    Idempotent: safe to call again on a later "Получить полис повторно"
+    click (same admin route, see app.web.admin_routes) -- accepts the
+    order already being is_operator_reported_paid (or further along, i.e.
+    is_policy_retrieved) as well as the first-time is_bog_link_ready case,
+    so a repeat call is a harmless no-op re-write rather than an error."""
     issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
-    if issuance is None or not issuance.is_bog_link_ready:
+    if issuance is None or not (issuance.is_bog_link_ready or issuance.is_operator_reported_paid or issuance.is_policy_retrieved):
         raise TplIssuanceError("No ready BOG payment link to confirm for this order")
     tpl_repo.mark_operator_reported_paid(conn, order.id)
     issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
@@ -484,6 +491,51 @@ def retrieve_issued_policy(conn: sqlite3.Connection, order: Order, settings: Set
         additional_terms_document_url=classified.get("additional_terms"),
     )
 
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert issuance is not None
+    return issuance
+
+
+# Immediate attempt + 3 short-delay retries (4 attempts total, ~8s worst-case
+# added latency) -- never unbounded/infinite polling. Chosen specifically
+# because every admin route in this project is a plain SYNC FastAPI handler,
+# dispatched through starlette's own threadpool rather than run as an asyncio
+# coroutine (see app.db.get_connection's own docstring for why this
+# architecture already relies on that) -- a blocking time.sleep() here only
+# occupies the one worker thread servicing this single manual admin click,
+# exactly like every other synchronous call this codebase already makes
+# (SQLite, httpx, even Telethon via asyncio.run). A human operator is
+# actively waiting on this one specific action; this pattern must NEVER be
+# copied onto anything customer-facing or high-frequency.
+_RETRY_DELAYS_SECONDS = (2, 3, 3)
+
+
+def retrieve_issued_policy_with_retry(conn: sqlite3.Connection, order: Order, settings: Settings) -> TplIssuance:
+    """Wraps retrieve_issued_policy with the bounded retry schedule above --
+    used by app.web.admin_routes right after report_operator_paid, and
+    again by its "Получить полис повторно" retry action, so a slow TPL
+    issuance never has to be treated as a hard failure by the caller.
+
+    Never raises PolicyNotReadyError/PolicyRetrievalError itself: returns
+    the current TplIssuance either way (ready, or still not ready after
+    the window) so callers only need to check is_policy_retrieved
+    afterward. A transient TPL/network error during any attempt is
+    recorded via repository.record_error once the window is exhausted --
+    it never loses the order or corrupts issuance_status, same guarantee
+    retrieve_issued_policy itself already provides. Does not create
+    another TPL application or initiate another BOG payment -- this only
+    ever calls retrieve_issued_policy, never issue_tpl_policy."""
+    last_error_message: str | None = None
+    for delay in (0,) + _RETRY_DELAYS_SECONDS:
+        if delay:
+            time.sleep(delay)
+        try:
+            return retrieve_issued_policy(conn, order, settings)
+        except (PolicyNotReadyError, PolicyRetrievalError) as exc:
+            last_error_message = str(exc)
+
+    if last_error_message:
+        tpl_repo.record_error(conn, order.id, error_message=last_error_message)
     issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
     assert issuance is not None
     return issuance
