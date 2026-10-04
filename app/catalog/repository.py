@@ -220,3 +220,31 @@ def deactivate_models_not_in(conn: sqlite3.Connection, manufacturer_id: int, ext
         (manufacturer_id, *external_ids),
     )
     return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# "Other" -- tpl.ge's own catch-all catalog entries
+# ---------------------------------------------------------------------------
+#
+# Manufacturer: tpl.ge's catalog has a real "Other" manufacturer (external_id
+# 1), synced like any other. Model: every synced manufacturer has an "Other"
+# model -- tpl.ge's own, or ours (external_id -1) when tpl.ge's list lacks one
+# (see app.catalog.sync._OTHER_MODEL_EXTERNAL_ID). Found by that exact name,
+# never an invented id.
+
+OTHER_NAME = "Other"
+
+
+def get_other_manufacturer(conn: sqlite3.Connection) -> Manufacturer | None:
+    row = conn.execute(
+        "SELECT * FROM insurance_manufacturers WHERE active = 1 AND name = ? ORDER BY external_id LIMIT 1", (OTHER_NAME,)
+    ).fetchone()
+    return Manufacturer.from_row(row) if row else None
+
+
+def get_other_model(conn: sqlite3.Connection, manufacturer_id: int) -> VehicleModel | None:
+    row = conn.execute(
+        "SELECT * FROM insurance_vehicle_models WHERE manufacturer_id = ? AND active = 1 AND name = ? ORDER BY id LIMIT 1",
+        (manufacturer_id, OTHER_NAME),
+    ).fetchone()
+    return VehicleModel.from_row(row) if row else None

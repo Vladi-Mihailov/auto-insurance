@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Цены{% endblock %}
+{% block content %}
+<section class="step">
+  <p class="step__text"><a href="/admin/orders">← Заказы</a></p>
+  <h1 class="step__title">Цены — Грузия</h1>
+  <p class="step__text">
+    Розничные цены в рублях. Действуют сразу для сайта и Telegram-бота.
+    Уже созданные заказы сохраняют свою цену.
+  </p>
+
+  {% if saved is not none %}
+  <p class="step__text">✅ Сохранено изменений: {{ saved }}</p>
+  {% endif %}
+  {% if errors %}
+  <p class="form__error">Цены не сохранены — исправьте отмеченные поля.</p>
+  {% endif %}
+
+  <form method="post" action="/admin/prices">
+    <div class="price-table-wrap">
+      <table class="price-table">
+        <thead>
+          <tr>
+            <th>Категория</th>
+            {% for column in columns %}<th>{{ column.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <th scope="row">{{ row.category.name }}</th>
+            {% for column in columns %}
+            {% set cell = row.cells.get(column.code) %}
+            <td>
+              {% if cell %}
+              <input type="text" inputmode="numeric" name="{{ cell.field }}"
+                     aria-label="{{ row.category.name }}, {{ column.label }}"
+                     value="{{ submitted.get(cell.field, cell.effective_rub if cell.effective_rub is not none else '') }}">
+              {% if errors.get(cell.field) %}<span class="form__error">{{ errors[cell.field] }}</span>{% endif %}
+              <span class="price-table__hint">
+                {% if cell.override %}
+                изменено{% if cell.override.updated_by %} ({{ cell.override.updated_by }}){% endif %};
+                по умолчанию {{ cell.default_rub | rub if cell.default_rub is not none else "—" }}
+                {% else %}
+                по умолчанию (config)
+                {% endif %}
+              </span>
+              {% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="submit" class="btn btn--primary btn--lg">Сохранить цены</button>
+  </form>
+
+  {% set overridden = [] %}
+  {% for row in rows %}{% for code, cell in row.cells.items() %}{% if cell.override %}{% set _ = overridden.append((row, code, cell)) %}{% endif %}{% endfor %}{% endfor %}
+  {% if overridden %}
+  <h2 class="step__title step__title--sm">Вернуть цену по умолчанию</h2>
+  {% for row, code, cell in overridden %}
+  <form method="post" action="/admin/prices/reset" class="price-reset">
+    <input type="hidden" name="category_code" value="{{ row.category.code }}">
+    <input type="hidden" name="period_code" value="{{ code }}">
+    <button type="submit" class="btn btn--ghost">
+      {{ row.category.name }}, {{ code }}: {{ cell.effective_rub | rub }} → {{ cell.default_rub | rub if cell.default_rub is not none else "—" }} ₽
+    </button>
+  </form>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endblock %}

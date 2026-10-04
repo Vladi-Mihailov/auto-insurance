@@ -15,13 +15,20 @@ test_routes_smoke.py -- upsert_category is a true idempotent upsert, so
 this is safe regardless of test collection order.
 """
 
+from datetime import timedelta
+
 from fastapi.testclient import TestClient
 
 from app.catalog.repository import mark_models_synced, upsert_category, upsert_manufacturer, upsert_model
+from app.dates.rules import today_in_georgia
 from app.db import get_connection
 from app.deps import get_settings
 from app.main import app
 from policyholder_helpers import valid_policyholder_data
+
+# Relative to Georgia's own "today" (same rule the /date step validates
+# against) -- never a fixed literal that silently expires.
+_START_DATE = (today_in_georgia() + timedelta(days=30)).isoformat()
 
 _settings = get_settings()
 _conn = get_connection(_settings.app.db_file)
@@ -36,7 +43,7 @@ _conn.close()
 
 def _reach_policyholder(client_):
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    client_.post("/date", data={"start_date": "2026-08-20"})
+    client_.post("/date", data={"start_date": _START_DATE})
     client_.post("/method", data={"choice": "manual"})
     client_.post(
         "/vehicle",

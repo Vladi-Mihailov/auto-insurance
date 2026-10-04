@@ -161,3 +161,50 @@ def build_candidates(conn: sqlite3.Connection, ocr_result: OcrResult) -> Vehicle
         model_id=model.id if model else None,
         model_text=ocr_result.model,
     )
+
+
+def apply_other_fallback(conn: sqlite3.Connection, candidates: VehicleDataCandidates) -> tuple[VehicleDataCandidates, str | None, str | None]:
+    """"Recognized but not in our catalog" is not "not recognized": when OCR
+    read a manufacturer (or model) text that has no catalog match, the
+    catalog selection becomes the catalog's own "Other" entry (see
+    app.catalog.repository.get_other_manufacturer / get_other_model) and the
+    document text is returned separately for display.
+
+    Returns (candidates with the fallback ids filled in, document make text
+    or None, document model text or None) -- a text is returned only for
+    the part that actually fell back to "Other". A text that was never read
+    stays empty, exactly as before."""
+    manufacturer_id, model_id = candidates.manufacturer_id, candidates.model_id
+    make_text = model_text = None
+
+    if manufacturer_id is None and candidates.manufacturer_text:
+        other = catalog_repo.get_other_manufacturer(conn)
+        if other is not None:
+            manufacturer_id = other.id
+            make_text = candidates.manufacturer_text.strip()
+            model_id = None
+
+    if manufacturer_id is not None and model_id is None and (candidates.model_text or make_text):
+        manufacturer = catalog_repo.get_manufacturer(conn, manufacturer_id)
+        if manufacturer is not None and manufacturer.models_never_synced:
+            sync_models_on_demand(conn, manufacturer)  # guarantees an "Other" model when it succeeds
+        other_model = catalog_repo.get_other_model(conn, manufacturer_id)
+        if other_model is not None:
+            model_id = other_model.id
+            model_text = candidates.model_text.strip() if candidates.model_text else None
+
+    if (manufacturer_id, model_id) == (candidates.manufacturer_id, candidates.model_id):
+        return candidates, None, None
+    return (
+        VehicleDataCandidates(
+            registration_number=candidates.registration_number,
+            identifier_type=candidates.identifier_type,
+            identifier=candidates.identifier,
+            manufacturer_id=manufacturer_id,
+            manufacturer_text=candidates.manufacturer_text,
+            model_id=model_id,
+            model_text=candidates.model_text,
+        ),
+        make_text,
+        model_text,
+    )

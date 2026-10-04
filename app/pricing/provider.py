@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
+from app.pricing.overrides import read_override_prices
 from app.settings import Settings
 
 
@@ -50,6 +51,26 @@ def _resolve_tr_tl_price_rub(price_tl: int, conversion) -> int:
 
 
 def available_periods(settings: Settings, country_code: str, category_code: str) -> list[PeriodOption]:
+    """The EFFECTIVE periods/prices: config/config.yaml defines which periods
+    exist and their default price; an admin price override (see
+    app.pricing.overrides, /admin/prices) replaces the price of an existing
+    period. Callers never know which of the two a price came from."""
+    # A settings object with no DB (some pure-pricing unit tests build a
+    # minimal one) simply has no overrides.
+    db_file = getattr(getattr(settings, "app", None), "db_file", None)
+    overrides = read_override_prices(db_file, country_code, category_code) if db_file else {}
+    options = config_periods(settings, country_code, category_code)
+    if not overrides:
+        return options
+    return [
+        PeriodOption(code=p.code, label=p.label, price_rub=overrides.get(p.code, p.price_rub)) for p in options
+    ]
+
+
+def config_periods(settings: Settings, country_code: str, category_code: str) -> list[PeriodOption]:
+    """config/config.yaml's own periods/prices, ignoring admin overrides --
+    the default an override replaces (and what /admin/prices shows as
+    "по умолчанию"). Everything customer-facing uses available_periods."""
     categories = settings.pricing.periods_by_country_category.get(country_code, {})
     periods = categories.get(category_code, [])
     # TR-only TL->RUB conversion: gated on country_code == "TR" explicitly,

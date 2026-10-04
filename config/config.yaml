@@ -315,3 +315,22 @@ duration_ranges:
         reference_days_2: 30
         reference_price_rub_2: 2149
         discount_percent: 0
+
+# Telegram sales-bot identities (app.telegram_bot) -- non-secret branding
+# only. The key is the bot_key: selected at runtime by TELEGRAM_BOT_KEY and
+# stored on every order that bot takes (insurance_orders.bot_key). The
+# token and manager ids are secrets and live ONLY in .env
+# (TELEGRAM_BOT_TOKEN / TELEGRAM_BOT_MANAGER_IDS). A second bot is a second
+# entry here -- no code change. username is informational (deep links);
+# the running bot learns its real username from Telegram itself.
+telegram_bots:
+  osago24ge:
+    country_code: GE
+    username: OSAGO24GEbot
+    intro_title: "🇬🇪 ОСАГО Грузии"
+    intro_text: "Оформите страховку автомобиля для поездки в Грузию онлайн."
+    # Fixed policyholder contacts put on every order this bot takes (the
+    # email/phone tpl.ge issuance needs) -- its customers are never asked
+    # for them. Omit both to make the bot ask its customers instead.
+    customer_email: tplgee@mail.ru
+    customer_phone: "+995 574 22 06 25"

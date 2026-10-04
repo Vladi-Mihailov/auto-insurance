@@ -79,6 +79,25 @@ class Order:
     owner_phone: str | None
     owner_email: str | None
 
+    # Transport/attribution metadata (see app.db._ORDER_COLUMN_MIGRATIONS).
+    # Defaulted so every existing construction site keeps working; channel
+    # is "web" for every order the web checkout ever created.
+    channel: str = "web"
+    bot_key: str | None = None
+    telegram_user_id: int | None = None
+    telegram_chat_id: int | None = None
+    telegram_username: str | None = None
+    acquisition_source: str | None = None
+    client_checkout_id: str | None = None
+    vehicle_make_document: str | None = None
+    vehicle_model_document: str | None = None
+    payment_mode: str | None = None  # None = customer payment route; "operator" (see app.db)
+    created_by_telegram_user_id: int | None = None
+
+    @property
+    def is_operator_order(self) -> bool:
+        return self.payment_mode == "operator"
+
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Order":
         return cls(
@@ -132,6 +151,17 @@ class Order:
             owner_citizenship=row["owner_citizenship"],
             owner_phone=row["owner_phone"],
             owner_email=row["owner_email"],
+            channel=row["channel"],
+            bot_key=row["bot_key"],
+            telegram_user_id=row["telegram_user_id"],
+            telegram_chat_id=row["telegram_chat_id"],
+            telegram_username=row["telegram_username"],
+            acquisition_source=row["acquisition_source"],
+            client_checkout_id=row["client_checkout_id"],
+            vehicle_make_document=row["vehicle_make_document"],
+            vehicle_model_document=row["vehicle_model_document"],
+            payment_mode=row["payment_mode"],
+            created_by_telegram_user_id=row["created_by_telegram_user_id"],
         )
 
     @property

@@ -23,7 +23,10 @@ class OrderStatus(str, Enum):
 
 ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.DRAFT: {OrderStatus.DATA_COMPLETED, OrderStatus.CANCELLED},
-    OrderStatus.DATA_COMPLETED: {OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED},
+    # -> PAID only for an operator order (payment collected outside the
+    # bot; see app.orders.payment.mark_operator_issuance) -- never for a
+    # customer order, which always goes through AWAITING_PAYMENT.
+    OrderStatus.DATA_COMPLETED: {OrderStatus.AWAITING_PAYMENT, OrderStatus.PAID, OrderStatus.CANCELLED},
     OrderStatus.AWAITING_PAYMENT: {OrderStatus.PAYMENT_REVIEW, OrderStatus.CANCELLED},
     OrderStatus.PAYMENT_REVIEW: {OrderStatus.PAID, OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELLED},
     OrderStatus.PAID: {OrderStatus.PROCESSING, OrderStatus.CANCELLED},

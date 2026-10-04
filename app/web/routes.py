@@ -27,6 +27,7 @@ from app.dates.rules import GeorgiaDateRule, UnknownPeriodCode
 from app.deps import get_db, get_order_or_404, get_session_id, get_settings
 from app.notifications.telegram import notify_operator_payment_claimed
 from app.orders.models import Order
+from app.orders.payment import submit_payment_claim
 from app.orders.repository import set_dates, set_period, set_status
 from app.orders.state_machine import OrderStatus
 from app.pricing.provider import available_periods, get_duration_range, get_period, resolve_duration_price
@@ -366,13 +367,10 @@ def post_confirm_payment(
     enforcement layer; this check exists so an already-completed action
     never surfaces as a 500 to the customer.
     """
-    if order.status == OrderStatus.AWAITING_PAYMENT.value:
-        set_status(
-            conn,
-            order.id,
-            OrderStatus.PAYMENT_REVIEW,
-            note="customer submitted payment confirmation",
-        )
+    claim = submit_payment_claim(conn, order.id, note="customer submitted payment confirmation")
+    # Telegram-channel orders are reviewed through the bot's own manager
+    # notifications -- never an additional Telethon operator message.
+    if claim.changed and order.channel != "telegram":
         # Best-effort, and idempotent BY CONSTRUCTION: this call only ever
         # runs inside this same status-guarded branch, so a repeat POST or
         # page refresh that finds the order no longer AWAITING_PAYMENT

@@ -7,10 +7,17 @@ inert text, never used to open/read/write a path).
 """
 
 import io
+from dataclasses import dataclass
 
 from PIL import Image, ImageOps
 
+from app.ocr.orientation import OrientationDetector, rotate_upright
+
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+# Decoded-size ceiling (~40 MP, e.g. 8000x5000) -- far above any phone photo,
+# low enough that a small file claiming huge dimensions is rejected from its
+# header before Pillow ever allocates the pixels.
+MAX_PIXELS = 40_000_000
 ALLOWED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 ALLOWED_CONTENT_TYPES = ("image/jpeg", "image/png", "image/webp")
 _ALLOWED_PIL_FORMATS = ("JPEG", "PNG", "WEBP")
@@ -62,9 +69,50 @@ def validate_and_normalize_upload(data: bytes, *, filename: str | None, content_
     if content_type not in ALLOWED_CONTENT_TYPES:
         raise UploadValidationError("Неподдерживаемый формат файла. Загрузите JPEG, PNG или WEBP.")
 
+    return normalize_image_bytes(data).jpeg_bytes
+
+
+@dataclass(frozen=True)
+class NormalizedImage:
+    jpeg_bytes: bytes
+    # Degrees the image was rotated clockwise by orientation detection
+    # (after EXIF transposition); 0 when upright or not detected.
+    rotated_clockwise: int
+    # "not_checked" (no detector), "confident" (detector sure; rotated_clockwise
+    # says by how much, possibly 0), or "unknown" (detector ran, wasn't sure).
+    orientation: str
+
+    @property
+    def orientation_uncertain(self) -> bool:
+        return self.orientation != "confident"
+
+
+def normalize_image_bytes(
+    data: bytes,
+    *,
+    orientation_detector: OrientationDetector | None = None,
+    min_side: int = 0,
+) -> NormalizedImage:
+    """The byte-level half of upload handling, for callers that have no
+    trustworthy filename/content-type of their own (e.g. a Telegram photo):
+    real-size limit, real decode (never trusting any declared type),
+    pixel-count limit (checked from the header BEFORE the full decode, so a
+    decompression bomb is never expanded), optional minimum side length,
+    EXIF transposition, optional orientation correction, downscale, JPEG
+    re-encode. Raises UploadValidationError with a user-facing message."""
+    if not data:
+        raise UploadValidationError("Файл пустой. Загрузите фото документа.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise UploadValidationError("Файл слишком большой. Максимальный размер — 10 МБ.")
+
     try:
         image = Image.open(io.BytesIO(data))
+        width, height = image.size
+        if width * height > MAX_PIXELS:
+            raise UploadValidationError("Изображение слишком большое по размеру в пикселях. Загрузите фото поменьше.")
         image.load()  # force full decode now -- catches truncated/corrupt/spoofed files
+    except UploadValidationError:
+        raise
     except Exception as exc:
         raise UploadValidationError("Не удалось открыть файл как изображение. Попробуйте другое фото.") from exc
 
@@ -72,12 +120,38 @@ def validate_and_normalize_upload(data: bytes, *, filename: str | None, content_
         raise UploadValidationError("Неподдерживаемый формат файла. Загрузите JPEG, PNG или WEBP.")
 
     image = ImageOps.exif_transpose(image)
+    if min(image.size) < min_side:
+        raise UploadValidationError("Фото слишком маленькое — текст не прочитать. Сфотографируйте документ крупнее.")
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
+
+    rotated = 0
+    orientation = "not_checked"
+    if orientation_detector is not None:
+        guess = orientation_detector.detect(image)
+        if guess is None:
+            orientation = "unknown"
+        else:
+            orientation = "confident"
+            rotated = guess.rotate_clockwise
+            image = rotate_upright(image, rotated)
 
     if max(image.size) > _MAX_DIMENSION:
         image.thumbnail((_MAX_DIMENSION, _MAX_DIMENSION), Image.LANCZOS)
 
+    return NormalizedImage(jpeg_bytes=_encode_jpeg(image), rotated_clockwise=rotated, orientation=orientation)
+
+
+def rotated_variants(jpeg_bytes: bytes) -> list[bytes]:
+    """The same (already normalized) image turned 90/180/270 degrees -- for
+    ONE extra recognition attempt when the orientation couldn't be
+    determined locally (see app.telegram_bot.documents)."""
+    image = Image.open(io.BytesIO(jpeg_bytes))
+    image.load()
+    return [_encode_jpeg(rotate_upright(image, degrees)) for degrees in (90, 180, 270)]
+
+
+def _encode_jpeg(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="JPEG", quality=_JPEG_QUALITY)
     return buffer.getvalue()

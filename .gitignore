@@ -13,3 +13,6 @@ __pycache__/
 venv/
 *.egg-info/
 *.log
+# DB backups/copies (customer data) -- never committed.
+data/*.db.*
+data/*.bak*

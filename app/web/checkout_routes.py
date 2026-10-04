@@ -17,16 +17,36 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.analytics.repository import log_event
 from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
-from app.countries import COUNTRIES, match_citizenship_text
-from app.dates.rules import DateRule, FixedDurationDateRule, GeorgiaDateRule, UnknownPeriodCode, today_in_georgia
+from app.checkout import service as checkout_service
+# Checkout rules live in app.checkout.rules (shared with the Telegram bot);
+# imported here under their original private names so this module's code
+# and every existing importer (app.web.routes, tests) keep working unchanged.
+from app.checkout.rules import DEFAULT_COUNTRY_CODE, SUPPORTED_COUNTRY_CODES  # noqa: F401 -- re-exported
+from app.checkout.service import ocr_date_of_birth_or_none as _ocr_date_of_birth_or_none  # noqa: F401
+from app.checkout.service import ocr_engine_power_or_none as _ocr_engine_power_or_none  # noqa: F401
+from app.checkout.service import ocr_model_year_or_none as _ocr_model_year_or_none  # noqa: F401
+from app.checkout.service import resolve_catalog_selection as _resolve_catalog_selection
+from app.checkout.rules import allowed_category_codes as _allowed_category_codes
+from app.checkout.rules import category_period_step_completed as _category_period_step_completed
+from app.checkout.rules import draft_country_code as _draft_country_code
+from app.checkout.rules import duration_range_for as _duration_range
+from app.checkout.rules import fixed_duration_date_rule as _fixed_duration_date_rule
+from app.checkout.rules import parse_and_validate_start_date as _parse_and_validate_start_date
+from app.checkout.rules import parse_duration_range_dates as _parse_duration_range_dates
+from app.checkout.rules import require_draft_keys as _require_draft_keys
+from app.checkout.rules import requires_date_of_birth as _requires_date_of_birth
+from app.checkout.rules import requires_engine_power as _requires_engine_power
+from app.checkout.rules import requires_model_year as _requires_model_year
+from app.countries import COUNTRIES
+from app.dates.rules import UnknownPeriodCode, today_in_georgia
 from app.deps import get_db, get_ocr_provider, get_order_or_404, get_session_id, get_settings
 from app.notifications.telegram import notify_operator_new_order
 from app.ocr.image import MAX_FILES_PER_RECOGNITION, UploadValidationError, validate_and_normalize_upload
 from app.ocr.parser import build_candidates
 from app.ocr.provider import OcrProvider, OcrProviderError
 from app.orders.models import Order
-from app.orders.repository import create_order, set_dates, update_coverage, update_policyholder, update_vehicle_fields
-from app.pricing.provider import DurationRange, available_periods, get_duration_range, get_period, resolve_duration_price
+from app.orders.repository import set_dates, update_coverage, update_policyholder, update_vehicle_fields
+from app.pricing.provider import available_periods, get_period, resolve_duration_price
 from app.sessions.repository import clear_draft, get_draft, merge_draft
 from app.validation import (
     validate_citizenship,
@@ -45,189 +65,13 @@ from app.web.templating import render
 
 router = APIRouter()
 
-DATE_RULE = GeorgiaDateRule()
-
-# The only checkout-level notion of "which countries exist" right now (step 1
-# of the multi-country rollout -- see the GE/AM/TR gap-analysis report this
-# implements). Georgia is FIXED-period (DATE_RULE above); Turkey is also
-# fixed-period but with its own period set/prices-not-yet-set (see
-# _FIXED_DURATION_DATE_RULES/config.yaml's pricing.TR); Armenia is EXACT
-# DATE RANGE (see _duration_range/_parse_duration_range_dates) -- neither
-# AM nor TR has a real customer price yet (out of scope for this step, see
-# the gap-analysis report's PricingProvider design), so neither can reach
-# order creation through the real UI flow today. That's deliberate, not a
-# bug -- see post_policyholder's price guard below.
-SUPPORTED_COUNTRY_CODES = ("GE", "AM", "TR")
-DEFAULT_COUNTRY_CODE = "GE"
-
-# FIXED-period date rule per country -- GE's own untouched GeorgiaDateRule,
-# plus Turkey's own period set via the generic FixedDurationDateRule (see
-# app.dates.rules). A country absent here (Armenia) is never fixed-period at
-# all right now -- callers must check _duration_range first (see
-# _fixed_duration_date_rule's own docstring).
-_FIXED_DURATION_DATE_RULES: dict[str, DateRule] = {
-    "GE": DATE_RULE,
-    "TR": FixedDurationDateRule(day_periods={"30d": 30, "45d": 45, "90d": 90, "180d": 180, "365d": 365}),
-}
-
 
 def _redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
 
 
-def _draft_country_code(draft: dict | None) -> str:
-    """The country chosen at /start (see app.web.routes.start), carried
-    through the whole pre-order draft. Falls back to DEFAULT_COUNTRY_CODE
-    for a draft that predates this key (an in-flight session from before
-    this change, or any direct/bookmarked entry into the wizard that
-    skipped /start entirely) -- this deep into the wizard a missing/unknown
-    country is never a user-facing error, just "assume Georgia", exactly
-    the implicit behaviour every existing GE checkout already relied on."""
-    country_code = (draft or {}).get("country_code")
-    return country_code if country_code in SUPPORTED_COUNTRY_CODES else DEFAULT_COUNTRY_CODE
 
 
-def _allowed_category_codes(settings, country_code: str) -> list[str] | None:
-    """The single source of truth for "which internal vehicle_category_code
-    values does this country's checkout offer" (see
-    app.catalog.repository.list_categories's allowed_codes param, the only
-    consumer of this return value). None means unrestricted -- a country
-    absent from config.yaml's catalog.enabled_category_codes_by_country
-    (Georgia today) sees every active category exactly as before this
-    change; AM/TR are explicitly narrowed there instead of here, so enabling
-    more categories later is a config edit, never a code change."""
-    return settings.catalog.enabled_category_codes_by_country.get(country_code)
-
-
-# Single source of truth for "which country requires which of the new
-# AM/TR-only fields" (see the gap-analysis report's field matrix) -- every
-# route that shows, validates, or persists these fields goes through these
-# three, never a hardcoded country check duplicated per route/template.
-
-# Categories with no engine at all -- engine_power is never shown/required
-# for these regardless of country, even where the country would otherwise
-# require it (AM). Currently just trailer; a set (not a single hardcoded
-# check) so adding another engine-less category later is a one-line change
-# here, not a new branch.
-_CATEGORIES_WITHOUT_ENGINE = {"trailer"}
-
-
-def _requires_engine_power(country_code: str, category_code: str) -> bool:
-    # TR no longer requires this for ordinary OSAGO purchase (business
-    # decision, 2026-09-06): the source site (strahovka-turkiye.com) only
-    # asks for engine/motor info for a separate, unrelated "Turkish plates
-    # under customs deposit" service, not for buying the policy itself.
-    if category_code in _CATEGORIES_WITHOUT_ENGINE:
-        return False
-    return country_code == "AM"
-
-
-def _requires_model_year(country_code: str) -> bool:
-    return country_code == "TR"
-
-
-def _requires_date_of_birth(country_code: str) -> bool:
-    return country_code == "TR"
-
-
-# OCR-autofill guards for the three new fields (Step 5) -- an OCR-read value
-# goes through the EXACT SAME server-side validators manual entry uses (see
-# app.validation), never a separate/looser check. An implausible OCR read
-# (0 hp, model_year 3026, a future date_of_birth) is silently dropped here
-# rather than autofilled -- the field just stays empty for the user to type
-# by hand, same as any other unrecognized field; OCR never blocks on this.
-def _ocr_engine_power_or_none(raw: int | None) -> int | None:
-    if raw is None:
-        return None
-    value, error = validate_engine_power(str(raw))
-    return None if error else value
-
-
-def _ocr_model_year_or_none(raw: int | None) -> int | None:
-    if raw is None:
-        return None
-    value, error = validate_model_year(str(raw), current_year=today_in_georgia().year)
-    return None if error else value
-
-
-def _ocr_date_of_birth_or_none(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    value, error = validate_date_of_birth(raw, today=today_in_georgia())
-    return None if error else value.isoformat()
-
-
-def _duration_range(settings, country_code: str, category_code: str) -> DurationRange | None:
-    """None means (country, category) is a FIXED-period product (GE/TR
-    today) -- non-None means EXACT DATE RANGE (AM's passenger_car) where the
-    customer picks start_date/end_date directly instead of a period code.
-    Thin pass-through to app.pricing.provider.get_duration_range, kept as
-    its own helper so every caller in this module goes through the exact
-    same check rather than reaching into settings.pricing directly."""
-    return get_duration_range(settings, country_code, category_code)
-
-
-def _fixed_duration_date_rule(country_code: str) -> DateRule:
-    """Only ever called after confirming _duration_range(...) is None for
-    this (country, category) -- Armenia has no entry here at all (it isn't
-    a fixed-period country), so an unrecognized/AM country_code falls back
-    to Georgia's own rule, same "assume Georgia" default used everywhere
-    else in this module. Callers must not rely on that fallback ever firing
-    for AM in practice -- it's a safety net, not a real code path."""
-    return _FIXED_DURATION_DATE_RULES.get(country_code, DATE_RULE)
-
-
-def _category_period_step_completed(settings, draft: dict | None) -> bool:
-    """True once /category-period's OWN required data is present: always a
-    category, plus -- for a FIXED-period (country, category) -- a
-    period_code too. An EXACT DATE RANGE product (AM) has nothing further
-    to pick on /category-period at all (see post_category_period): its
-    period IS the start_date/end_date chosen on the next step, so a bare
-    category is already "done" here."""
-    if not draft or draft.get("vehicle_category_code") is None:
-        return False
-    country_code = _draft_country_code(draft)
-    if _duration_range(settings, country_code, draft["vehicle_category_code"]) is not None:
-        return True
-    return draft.get("period_code") is not None
-
-
-def _parse_duration_range_dates(
-    start_raw: str, end_raw: str, *, today: date, duration_range: DurationRange
-) -> tuple[date | None, date | None, str | None]:
-    """AM-style EXACT DATE RANGE validation: both dates are direct user
-    input (see the module-level comment on _FIXED_DURATION_DATE_RULES) --
-    there is no period_code to compute end_date FROM, so this is pure
-    validation, not date-math. duration_days uses the exact same "end -
-    start, in calendar days" definition GeorgiaDateRule's own period codes
-    already imply (see that class's docstring: "15d" means start_date + 15
-    days exactly, i.e. end_date - start_date == 15) -- so "10 days" here
-    means end_date is start_date + 10 days: duration_range.min_days <=
-    (end_date - start_date).days <= duration_range.max_days, inclusive on
-    both ends. Returns (start_date, end_date, error) -- the first two are
-    None whenever error is not None, same shape as
-    _parse_and_validate_start_date."""
-    parsed_start, error = _parse_and_validate_start_date(start_raw, today)
-    if error:
-        return None, None, error
-
-    try:
-        parsed_end = date.fromisoformat(end_raw)
-    except ValueError:
-        return None, None, "Некорректная дата окончания"
-
-    duration_days = (parsed_end - parsed_start).days
-    if duration_days < duration_range.min_days:
-        return None, None, f"Минимальный срок страхования — {duration_range.min_days} дней"
-    if duration_days > duration_range.max_days:
-        return None, None, f"Максимальный срок страхования — {duration_range.max_days} дней"
-    return parsed_start, parsed_end, None
-
-
-def _require_draft_keys(draft: dict | None, keys: tuple[str, ...]) -> bool:
-    if not draft:
-        return False
-    return all(draft.get(key) is not None for key in keys)
 
 
 _EMPTY_CONTACTS = {
@@ -239,17 +83,6 @@ _EMPTY_CONTACTS = {
 }
 
 
-def _parse_and_validate_start_date(raw: str, today: date) -> tuple[date | None, str | None]:
-    """Server-side source of truth for "start date can't be in the past" --
-    the HTML min= attribute (see date_step.html) is a UX nicety only and
-    must never be trusted alone, since a direct POST bypasses it entirely."""
-    try:
-        parsed = date.fromisoformat(raw)
-    except ValueError:
-        return None, "Некорректная дата"
-    if parsed < today:
-        return None, "Дата начала не может быть раньше сегодняшнего дня"
-    return parsed, None
 
 
 # ---------------------------------------------------------------------------
@@ -347,41 +180,15 @@ def post_category_period(
 ):
     draft = get_draft(conn, session_id) or {}
     settings = get_settings()
-    country_code = _draft_country_code(draft)
-    allowed_codes = _allowed_category_codes(settings, country_code)
-    category = catalog_repo.get_category_by_code(conn, category_code)
-    # A category can exist and be active in the catalog while still not
-    # being enabled for THIS country (e.g. "truck" for AM/TR right now) --
-    # treated identically to an unknown category, never a separate error
-    # message, so a tampered/stale POST can't smuggle in a category this
-    # country's checkout doesn't actually offer.
-    if category is not None and allowed_codes is not None and category.code not in allowed_codes:
-        category = None
+    selection = checkout_service.select_category_period(
+        conn, settings, session_id=session_id, category_code=category_code, period_code=period_code
+    )
 
-    duration_range = _duration_range(settings, country_code, category.code) if category else None
-
-    error = None
-    period = None
-    if category is None:
-        error = "Выберите категорию транспорта"
-    elif duration_range is not None:
-        # EXACT DATE RANGE product (AM) -- nothing else to validate on THIS
-        # step at all: there is no period_code, and start_date/end_date are
-        # chosen on the next step (see post_date_step's duration_range
-        # branch). A category alone is a complete /category-period
-        # submission for this kind of product.
-        pass
-    else:
-        period = get_period(settings, country_code, category_code, period_code)
-        if period is None:
-            error = "Выберите один из доступных периодов"
-        elif not period.is_priced:
-            error = "Цена для этого периода пока не настроена — оформление временно недоступно"
-
-    if error:
-        categories = catalog_repo.list_categories(conn, allowed_codes=allowed_codes)
+    if not selection.ok:
+        country_code = _draft_country_code(draft)
+        categories = checkout_service.list_offered_categories(conn, settings, country_code)
         # Re-derive duration_range from the RAW submitted category_code (not
-        # the possibly-None `category` above) so an unknown-category error
+        # the possibly-None selection.category) so an unknown-category error
         # still redisplays using whatever the category_code the user
         # actually typed would have meant, same as the periods list below
         # already did before this change.
@@ -389,7 +196,7 @@ def post_category_period(
         periods = (
             []
             if redisplay_duration_range is not None
-            else [p for p in available_periods(settings, country_code, category_code) if p.is_priced]
+            else checkout_service.list_priced_periods(settings, country_code, category_code)
         )
         return render(
             request,
@@ -400,7 +207,7 @@ def post_category_period(
                 "periods": periods,
                 "selected_period": None,
                 "duration_range": redisplay_duration_range,
-                "error": error,
+                "error": selection.error,
                 "steps": build_draft_steps(draft, 1),
                 "form_action": "/category-period",
                 "back_url": "/",
@@ -409,47 +216,6 @@ def post_category_period(
             status_code=422,
         )
 
-    if duration_range is not None:
-        draft_update = {
-            "vehicle_category_code": category.code,
-            "period_code": None,
-            "price_customer_minor": None,
-        }
-        merge_draft(conn, session_id, draft_update)
-        log_event(
-            conn,
-            session_id=session_id,
-            order_id=None,
-            event_name="category_period_selected",
-            properties={"category": category.code, "period": None},
-        )
-        return _redirect("/date")
-
-    draft_update = {
-        "vehicle_category_code": category_code,
-        "period_code": period.code,
-        "price_customer_minor": period.price_minor,
-    }
-    # Dependency invalidation: if the user already picked a start date on an
-    # earlier pass through this wizard and is now changing the period, the
-    # end_date stored alongside it was computed for the OLD period and would
-    # otherwise silently go stale until the /date step happened to be
-    # resubmitted. Recompute it now so nothing downstream ever reads a
-    # start/end pair that don't actually match the current period.
-    if draft.get("start_date"):
-        recomputed_end = _fixed_duration_date_rule(country_code).compute_end_date(
-            date.fromisoformat(draft["start_date"]), period.code
-        )
-        draft_update["end_date"] = recomputed_end.isoformat()
-
-    merge_draft(conn, session_id, draft_update)
-    log_event(
-        conn,
-        session_id=session_id,
-        order_id=None,
-        event_name="category_period_selected",
-        properties={"category": category_code, "period": period.code},
-    )
     return _redirect("/date")
 
 
@@ -580,6 +346,10 @@ def post_date_step(
 
     if duration_range is None:
         parsed_start, error = _parse_and_validate_start_date(start_date, today)
+        if not error:
+            error = checkout_service.set_fixed_period_start_date(
+                conn, settings, session_id=session_id, start_date=parsed_start, today=today
+            ).error
         if error:
             return render(
                 request,
@@ -599,8 +369,6 @@ def post_date_step(
                 status_code=422,
             )
 
-        computed_end_date = _fixed_duration_date_rule(country_code).compute_end_date(parsed_start, draft["period_code"])
-        merge_draft(conn, session_id, {"start_date": parsed_start.isoformat(), "end_date": computed_end_date.isoformat()})
         return _redirect("/method")
 
     parsed_start, parsed_end, error = _parse_duration_range_dates(
@@ -856,50 +624,9 @@ def post_documents_upload(
         },
     )
 
-    # Partial recognition is still success (section 18) -- whatever wasn't
-    # found/matched stays None, and the existing /vehicle form (reached via
-    # the redirect below) lets the user fill in or correct the rest. Hint
-    # text is transient review context only, never a stand-in for a real
-    # manufacturer_id/model_id (see app.ocr.models.VehicleDataCandidates).
-    #
-    # ocr_* keys below are /policyholder's initial-autofill-only source (see
-    # get_policyholder) -- never re-applied once the user has typed/saved
-    # anything of their own (see post_policyholder/get_edit_policyholder).
-    # citizenship is matched against app.countries.COUNTRIES HERE, once, so
-    # every reader of this draft key already holds a value safe to
-    # preselect verbatim -- never the raw, unvalidated OCR string.
-    merge_draft(
-        conn,
-        session_id,
-        {
-            "data_entry_method": "documents",
-            "registration_number": candidates.registration_number,
-            "identifier_type": candidates.identifier_type,
-            "identifier": candidates.identifier,
-            "manufacturer_id": candidates.manufacturer_id,
-            "model_id": candidates.model_id,
-            "ocr_manufacturer_hint": candidates.manufacturer_text if not candidates.manufacturer_id else None,
-            "ocr_model_hint": candidates.model_text if not candidates.model_id else None,
-            "ocr_policyholder_full_name": ocr_result.policyholder_full_name,
-            "ocr_identification_number": ocr_result.passport_number,
-            "ocr_citizenship": match_citizenship_text(ocr_result.citizenship),
-            "ocr_driver_full_name": ocr_result.driver_full_name,
-            "ocr_owner_full_name": ocr_result.owner_full_name,
-            # engine_power/model_year are vehicle-document fields, written
-            # directly into their real draft keys -- same as
-            # registration_number/manufacturer_id above -- since /vehicle
-            # (the very next screen) reads them straight from the draft,
-            # with no separate review-hint indirection needed (there's no
-            # fuzzy catalog match involved for a plain number the way there
-            # is for manufacturer/model text). date_of_birth is a
-            # policyholder-document field and follows the ocr_* hint
-            # pattern instead, exactly like ocr_policyholder_full_name
-            # above (see get_policyholder's initial-autofill-only read).
-            "engine_power": _ocr_engine_power_or_none(ocr_result.engine_power),
-            "model_year": _ocr_model_year_or_none(ocr_result.model_year),
-            "ocr_date_of_birth": _ocr_date_of_birth_or_none(ocr_result.date_of_birth),
-        },
-    )
+    # Draft mapping shared with the Telegram bot -- see
+    # app.checkout.service.ocr_draft_update for the per-key rules.
+    merge_draft(conn, session_id, checkout_service.ocr_draft_update(ocr_result, candidates))
     return _redirect("/vehicle")
 
 
@@ -935,41 +662,6 @@ def _vehicle_form_context(
     }
 
 
-def _resolve_catalog_selection(
-    conn: sqlite3.Connection, manufacturer_id_raw: str, model_id_raw: str
-) -> tuple[int | None, str | None, int | None, str | None, dict[str, str]]:
-    """Validates manufacturer_id/model_id against the local catalog — never
-    trusts these IDs (or any name) from the browser; "Other" is just a
-    regular synced row per manufacturer and goes through the exact same
-    checks as any other model, no special-casing. Returns (manufacturer_id,
-    manufacturer_name, model_id, model_name, errors) — the names are the
-    catalog's current names, used by callers as an order-creation-time/
-    edit-time SNAPSHOT (see app.orders.repository.create_order)."""
-    errors: dict[str, str] = {}
-
-    try:
-        manufacturer_id = int(manufacturer_id_raw)
-    except (TypeError, ValueError):
-        errors["manufacturer_id"] = "Выберите производителя"
-        return None, None, None, None, errors
-
-    manufacturer = catalog_repo.get_manufacturer(conn, manufacturer_id)
-    if manufacturer is None:
-        errors["manufacturer_id"] = "Неизвестный производитель"
-        return None, None, None, None, errors
-
-    try:
-        model_id = int(model_id_raw)
-    except (TypeError, ValueError):
-        errors["model_id"] = "Выберите модель"
-        return manufacturer_id, manufacturer.name, None, None, errors
-
-    model = catalog_repo.get_model(conn, model_id)
-    if model is None or model.manufacturer_id != manufacturer_id:
-        errors["model_id"] = "Выберите модель из списка выбранного производителя"
-        return manufacturer_id, manufacturer.name, None, None, errors
-
-    return manufacturer_id, manufacturer.name, model_id, model.name, {}
 
 
 @router.get("/vehicle")
@@ -1329,6 +1021,11 @@ def post_policyholder(
     draft = get_draft(conn, session_id)
     if not _require_draft_keys(draft, ("manufacturer_id", "model_id")):
         return _redirect("/vehicle")
+    # The order is priced at the CURRENT effective price (config + any
+    # /admin/prices override), not whatever was current when the period was
+    # picked -- see checkout_service.refresh_draft_price.
+    checkout_service.refresh_draft_price(conn, get_settings(), session_id=session_id)
+    draft = get_draft(conn, session_id)
     if draft.get("price_customer_minor") is None:
         # No pricing mechanism exists yet for this (country, category) --
         # currently only AM's EXACT DATE RANGE product reaches here with a
@@ -1418,49 +1115,30 @@ def post_policyholder(
             status_code=422,
         )
 
-    # Re-resolve manufacturer/model right now, at order-creation time — this
-    # IS the snapshot moment (see app.orders.repository.create_order). Also
-    # a defensive re-check: if either got deactivated in the (normally tiny)
-    # window between /vehicle and here, treat the selection as invalid
-    # rather than write a snapshot for something that no longer validates.
-    manufacturer = catalog_repo.get_manufacturer(conn, draft["manufacturer_id"])
-    model = catalog_repo.get_model(conn, draft["model_id"]) if manufacturer else None
-    if manufacturer is None or model is None:
-        return _redirect("/vehicle")
-
-    order = create_order(
-        conn,
-        session_id=session_id,
-        country_code=country_code,
-        vehicle_category_code=draft["vehicle_category_code"],
-        period_code=draft["period_code"],
-        start_date=date.fromisoformat(draft["start_date"]),
-        end_date=date.fromisoformat(draft["end_date"]),
-        price_customer_minor=draft["price_customer_minor"],
-        data_entry_method=draft["data_entry_method"],
-        registration_number=draft["registration_number"],
-        identifier_type=draft["identifier_type"],
-        identifier=draft["identifier"],
-        manufacturer_id=manufacturer.id,
-        manufacturer_name=manufacturer.name,
-        model_id=model.id,
-        model_name=model.name,
-        full_name=clean_name,
-        identification_number=clean_identification_number,
-        citizenship=clean_citizenship,
-        contact_email=clean_contacts["contact_email"],
-        contact_telegram=clean_contacts["contact_telegram"],
-        contact_phone=clean_contacts["contact_phone"],
-        contact_max=clean_contacts["contact_max"],
-        contact_other=clean_contacts["contact_other"],
-        customer_currency="RUB",
-        purchase_currency="GEL",
-        engine_power=draft.get("engine_power"),
-        model_year=draft.get("model_year"),
-        date_of_birth=clean_dob,
-        **driver_clean,
-        **owner_clean,
-    )
+    # Shared with the Telegram bot: re-reads the current price, re-resolves
+    # manufacturer/model (the snapshot moment) and creates the order --
+    # see checkout_service.create_order_from_draft.
+    try:
+        order = checkout_service.create_order_from_draft(
+            conn,
+            get_settings(),
+            session_id=session_id,
+            policyholder={
+                "full_name": clean_name,
+                "identification_number": clean_identification_number,
+                "citizenship": clean_citizenship,
+                "contact_email": clean_contacts["contact_email"],
+                "contact_telegram": clean_contacts["contact_telegram"],
+                "contact_phone": clean_contacts["contact_phone"],
+                "contact_max": clean_contacts["contact_max"],
+                "contact_other": clean_contacts["contact_other"],
+                "date_of_birth": clean_dob,
+                **driver_clean,
+                **owner_clean,
+            },
+        )
+    except checkout_service.OrderFromDraftError as exc:
+        return _redirect("/vehicle" if exc.reason == "catalog" else "/category-period")
     log_event(conn, session_id=session_id, order_id=order.id, event_name="policyholder_provided")
     # The draft has now been fully consumed into a real order — clear it so
     # a resubmitted POST (browser back + resubmit, double form submission)

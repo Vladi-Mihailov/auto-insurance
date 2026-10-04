@@ -10,7 +10,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app import tokens
 from app.db import get_connection
-from app.ocr.provider import OcrProvider, OpenAIVisionOcrProvider
+from app.ocr.provider import OcrProvider, build_ocr_provider
 from app.orders.models import Order
 from app.orders.repository import get_order_by_token
 from app.sessions.repository import ensure_session
@@ -67,9 +67,9 @@ def get_ocr_provider() -> OcrProvider | None:
     the user and offer the manual-entry fallback, never silently swap in
     FakeOcrProvider as a hidden production stub."""
     settings = get_settings()
-    if not settings.ocr.openai_api_key:
-        return None
-    return OpenAIVisionOcrProvider(api_key=settings.ocr.openai_api_key, model=settings.ocr.vision_model)
+    # Also None for a configured-but-unusable key (e.g. a non-ASCII
+    # placeholder) -- see app.ocr.provider.build_ocr_provider.
+    return build_ocr_provider(settings.ocr.openai_api_key, settings.ocr.vision_model)
 
 
 _admin_basic_auth = HTTPBasic()
@@ -100,3 +100,11 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(_admin_basic_auth)
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Basic"},
         )
+
+
+def current_admin_username(credentials: HTTPBasicCredentials = Depends(_admin_basic_auth)) -> str:
+    """The authenticated admin's username, for audit fields (e.g.
+    insurance_price_overrides.updated_by). Only meaningful on routes that
+    also depend on require_admin (every /admin/* route does, router-wide) --
+    FastAPI resolves _admin_basic_auth once per request for both."""
+    return credentials.username

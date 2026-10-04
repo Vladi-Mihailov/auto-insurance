@@ -123,7 +123,180 @@ CREATE TABLE IF NOT EXISTS insurance_tpl_issuance (
     updated_at TEXT NOT NULL,
     FOREIGN KEY (order_id) REFERENCES insurance_orders (id)
 );
+
+-- Files attached to an Order by the Telegram bot: the customer's vehicle
+-- document photos, their payment receipt(s), and the finished policy PDF.
+-- Only Telegram's own file references are stored -- NEVER the file bytes
+-- (the files stay on Telegram's servers; the bot forwards/re-sends them by
+-- file_id). A file_id is only valid for the bot that received it, hence
+-- bot_key. telegram_file_unique_id is Telegram's stable per-file identity
+-- (same file re-sent = same value), which is what the UNIQUE constraint
+-- uses to make a duplicate receipt/document upload a no-op rather than a
+-- second row. file_id/file_unique_id are never logged anywhere.
+CREATE TABLE IF NOT EXISTS insurance_order_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('vehicle_document', 'payment_receipt', 'policy')),
+    bot_key TEXT NOT NULL,
+    telegram_file_id TEXT NOT NULL,
+    telegram_file_unique_id TEXT NOT NULL,
+    mime_type TEXT,
+    file_size INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE (order_id, kind, telegram_file_unique_id),
+    FOREIGN KEY (order_id) REFERENCES insurance_orders (id)
+);
+
+-- Admin-edited retail prices (/admin/prices). A row here OVERRIDES the
+-- config/config.yaml price for exactly one (country, category, period);
+-- no row = the config value applies, unchanged. Read by
+-- app.pricing.provider.available_periods, so every consumer (web checkout,
+-- Telegram bot, admin) sees the same effective price and none of them
+-- knows where it came from. period_code matches config.yaml's own period
+-- codes ("15d"/"30d"/"90d") -- an override can only re-price a period the
+-- config already defines, never invent one. price_rub is whole rubles,
+-- same unit as config.yaml's price_rub. Orders are unaffected: each order
+-- stores its own price_customer_minor at creation.
+CREATE TABLE IF NOT EXISTS insurance_price_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    country_code TEXT NOT NULL,
+    vehicle_category_code TEXT NOT NULL,
+    period_code TEXT NOT NULL,
+    price_rub INTEGER NOT NULL CHECK (price_rub > 0),
+    updated_at TEXT NOT NULL,
+    updated_by TEXT,
+    UNIQUE (country_code, vehicle_category_code, period_code)
+);
+
+-- One row per (order, manager, purpose): the Bot API message a manager was
+-- sent for an order (purpose 'order_card' = the actionable order card), so
+-- every manager's card can be edited when the order's state changes, and a
+-- repeated notification never sends an uncontrolled second card. A new
+-- payment-review round replaces message_id (the previous card has already
+-- been edited to its final state by then).
+CREATE TABLE IF NOT EXISTS telegram_manager_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    manager_user_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    purpose TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (order_id, manager_user_id, purpose),
+    FOREIGN KEY (order_id) REFERENCES insurance_orders (id)
+);
+
+-- A manager's pending "📄 Отправить полис" action: the NEXT PDF this
+-- manager sends the bot is the policy for exactly this order_id (always
+-- re-validated against the DB when the file arrives), until it expires.
+-- One per (bot, manager). Persisted so a bot restart can't silently
+-- attach a PDF to the wrong order or lose the manager's intent.
+CREATE TABLE IF NOT EXISTS telegram_manager_upload_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_key TEXT NOT NULL,
+    manager_user_id INTEGER NOT NULL,
+    order_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    UNIQUE (bot_key, manager_user_id),
+    FOREIGN KEY (order_id) REFERENCES insurance_orders (id)
+);
+
+-- A manager's pending "💰 Цены" price edit: the NEXT plain-text message this
+-- manager sends is the new RUB price for exactly this (country, category,
+-- period), until it expires. One per (bot, manager) -- same shape/lifecycle
+-- as telegram_manager_upload_contexts above, for the same reason (a bot
+-- restart must not lose or misattribute the manager's pending intent). The
+-- actual price write still goes through insurance_price_overrides via an
+-- explicit confirmation step (app.telegram_bot.staff_prices) -- this table
+-- only remembers WHICH cell a forthcoming typed number refers to, never a
+-- price value itself.
+CREATE TABLE IF NOT EXISTS telegram_manager_price_contexts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_key TEXT NOT NULL,
+    manager_user_id INTEGER NOT NULL,
+    country_code TEXT NOT NULL,
+    vehicle_category_code TEXT NOT NULL,
+    period_code TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    UNIQUE (bot_key, manager_user_id)
+);
+
+-- The bot's staff: who may use the manager functions (role 'manager') and
+-- who may also add/remove managers (role 'owner'). Identity is the
+-- Telegram user id; username is display metadata only (refreshed when the
+-- person uses the bot). Removal is a soft deactivation (active = 0).
+-- source: 'config' = bootstrapped from TELEGRAM_BOT_MANAGER_IDS /
+-- TELEGRAM_BOT_OWNER_ID (app.telegram_bot.staff.bootstrap), 'invite' =
+-- joined through an owner's one-time invite link.
+CREATE TABLE IF NOT EXISTS telegram_bot_staff (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_key TEXT NOT NULL,
+    telegram_user_id INTEGER NOT NULL,
+    username TEXT,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'manager')),
+    active INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL,
+    created_by INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (bot_key, telegram_user_id)
+);
+
+-- One-time manager invites (deep link t.me/<bot>?start=mgr_<token>). Only
+-- the SHA-256 of the token is stored; consuming one is a single
+-- compare-and-set UPDATE, so it can never be used twice. An invite only
+-- ever grants the 'manager' role.
+CREATE TABLE IF NOT EXISTS telegram_bot_staff_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_key TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_by INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    consumed_by INTEGER
+);
+
+-- Durable outbox of Telegram sends for Telegram-channel orders (manager
+-- cards/receipts, customer payment notices, card updates). Whoever changes
+-- an order's state (the bot, or the web admin) writes the job in the SAME
+-- transaction; only the bot process ever talks to Telegram, draining this
+-- table and retrying failures with backoff. dedupe_key makes enqueueing
+-- idempotent (INSERT OR IGNORE), so a replayed action never re-sends.
+-- payload holds only non-personal routing data (file row ids, message ids).
+CREATE TABLE IF NOT EXISTS telegram_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_key TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    order_id INTEGER NOT NULL,
+    target_chat_id INTEGER NOT NULL,
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (bot_key, dedupe_key),
+    FOREIGN KEY (order_id) REFERENCES insurance_orders (id)
+);
 """
+
+# Run after the column migrations (they may reference migrated columns).
+# Idempotent: IF NOT EXISTS.
+_POST_MIGRATION_SQL = [
+    # Idempotency key for "create the order for THIS completed checkout":
+    # a replayed/doubled create resolves to the existing order instead of a
+    # second one. Partial index: every pre-existing/web order has NULL.
+    """CREATE UNIQUE INDEX IF NOT EXISTS ux_insurance_orders_client_checkout_id
+       ON insurance_orders (client_checkout_id) WHERE client_checkout_id IS NOT NULL""",
+    "CREATE INDEX IF NOT EXISTS ix_insurance_orders_telegram_user ON insurance_orders (bot_key, telegram_user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_telegram_outbox_pending ON telegram_outbox (bot_key, status, next_attempt_at)",
+]
 
 # (column, definition) — added to insurance_orders if missing. Idempotent: safe to
 # run against a fresh DB (table already has none of these, all get added) or an
@@ -189,6 +362,45 @@ _ORDER_COLUMN_MIGRATIONS = [
     ("engine_power", "INTEGER"),
     ("model_year", "INTEGER"),
     ("date_of_birth", "TEXT"),
+    # Which transport created the order. NOT NULL DEFAULT 'web': every
+    # pre-existing row (all created by the web checkout) reads back as
+    # exactly that, never NULL/unknown.
+    ("channel", "TEXT NOT NULL DEFAULT 'web'"),
+    # Telegram-channel orders only (NULL for web): which bot identity took
+    # the order (see app.telegram_bot.profile.BotProfile.bot_key) and the
+    # customer's Telegram identity, so the SAME bot can later notify/deliver
+    # the policy to the right chat. telegram_username is display-only (it
+    # can change); telegram_user_id is the stable identity.
+    ("bot_key", "TEXT"),
+    ("telegram_user_id", "INTEGER"),
+    ("telegram_chat_id", "INTEGER"),
+    ("telegram_username", "TEXT"),
+    # Deep-link /start payload (e.g. "upper_lars"), already validated
+    # against [A-Za-z0-9_-]{1,64}. NULL = no attributed source.
+    ("acquisition_source", "TEXT"),
+    # Telegram checkout idempotency key (see _POST_MIGRATION_SQL's unique
+    # index). NULL for every web order.
+    ("client_checkout_id", "TEXT"),
+    # The brand/model text as written in the customer's document (or typed
+    # by them) when it is NOT in our catalog and the catalog selection fell
+    # back to tpl.ge's own "Other" entry. vehicle_make/vehicle_model stay the
+    # catalog-name snapshot (what TPL receives, i.e. "Other"); these keep the
+    # real "HAVAL" / "H9 ..." for people (manager card). NULL for every
+    # catalog-matched order and every order created before this column.
+    ("vehicle_make_document", "TEXT"),
+    ("vehicle_model_document", "TEXT"),
+    # How the customer's payment is handled. NULL = the normal customer
+    # route (payment details -> receipt -> manager check) -- every order
+    # created before this column. 'operator' = a manager/owner issued the
+    # policy directly for a customer from the bot; payment collection was
+    # handled outside the bot and NO receipt/payment check happened (the
+    # status history note says so too). See app.orders.payment.
+    ("payment_mode", "TEXT"),
+    # The Telegram user who created the order (the actor). For a customer's
+    # own order the same as telegram_user_id; for an operator order the
+    # manager -- never the policyholder, whose identity is only the
+    # policyholder fields (full_name, identification_number, citizenship).
+    ("created_by_telegram_user_id", "INTEGER"),
 ]
 
 # NULL means "this manufacturer's models have never been synced" — distinct
@@ -228,12 +440,34 @@ _TPL_ISSUANCE_COLUMN_MIGRATIONS = [
     # exactly one resend if this stayed NULL because the first attempt
     # failed (see app.web.admin_routes' delivery helper, the only writer).
     ("policy_sent_to_operator_at", "TEXT"),
+    # When the single POST /api/policies was claimed (issuance_status
+    # 'application_requested', see app.integrations.tpl_ge.models).
+    ("application_requested_at", "TEXT"),
+]
+
+# insurance_order_files: how Telegram delivered the file ('photo' or
+# 'document') -- decides whether it is re-sent with sendPhoto or
+# sendDocument. NULL for rows written before this column existed.
+_ORDER_FILE_COLUMN_MIGRATIONS = [
+    ("telegram_media_type", "TEXT"),
+]
+
+# Telegram bot conversation NAVIGATION state (which question the bot is
+# waiting for an answer to, e.g. a typed start date) -- kept on the same
+# row as the draft it belongs to, so there is exactly one place per
+# customer, and it survives a bot restart. Never business data: that stays
+# in draft_data (see app.telegram_bot.storage, which enforces this). NULL
+# for every web session.
+_SESSION_COLUMN_MIGRATIONS = [
+    ("conversation_state", "TEXT"),
 ]
 
 _COLUMN_MIGRATIONS = {
+    "insurance_sessions": _SESSION_COLUMN_MIGRATIONS,
     "insurance_orders": _ORDER_COLUMN_MIGRATIONS,
     "insurance_manufacturers": _MANUFACTURER_COLUMN_MIGRATIONS,
     "insurance_tpl_issuance": _TPL_ISSUANCE_COLUMN_MIGRATIONS,
+    "insurance_order_files": _ORDER_FILE_COLUMN_MIGRATIONS,
 }
 
 
@@ -280,6 +514,8 @@ def init_db(db_path: Path) -> None:
     try:
         conn.executescript(SCHEMA)
         _migrate_columns(conn)
+        for statement in _POST_MIGRATION_SQL:
+            conn.execute(statement)
         conn.commit()
     finally:
         conn.close()

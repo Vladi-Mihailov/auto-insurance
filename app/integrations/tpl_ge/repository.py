@@ -70,6 +70,29 @@ def mark_bog_link_ready(conn: sqlite3.Connection, order_id: int, *, bog_payment_
     conn.commit()
 
 
+def claim_application_request(
+    conn: sqlite3.Connection, order_id: int, *, tpl_product_id: int, tpl_purchase_price_gel: Decimal
+) -> bool:
+    """Atomically claim THE one POST /api/policies for this order: only from
+    PENDING/FAILED (nothing created yet), committed BEFORE the request is
+    sent. Returns False when someone else already claimed it (another
+    click, another process, the web admin) -- the caller must not send."""
+    now = _now()
+    cursor = conn.execute(
+        """
+        UPDATE insurance_tpl_issuance
+        SET issuance_status = ?, tpl_product_id = ?, tpl_purchase_price_gel = ?, application_requested_at = ?, updated_at = ?
+        WHERE order_id = ? AND issuance_status IN (?, ?)
+        """,
+        (
+            IssuanceStatus.APPLICATION_REQUESTED.value, tpl_product_id, str(tpl_purchase_price_gel), now, now,
+            order_id, IssuanceStatus.PENDING.value, IssuanceStatus.FAILED.value,
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
 def mark_operator_reported_paid(conn: sqlite3.Connection, order_id: int) -> None:
     conn.execute(
         "UPDATE insurance_tpl_issuance SET issuance_status = ?, updated_at = ? WHERE order_id = ?",

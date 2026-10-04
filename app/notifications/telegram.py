@@ -62,7 +62,7 @@ from pathlib import Path
 from telethon import TelegramClient
 
 from app.orders.models import Order
-from app.web.templating import _format_rub
+from app.formatting import format_rub as _format_rub
 
 logger = logging.getLogger(__name__)
 

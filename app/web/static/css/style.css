@@ -1480,3 +1480,12 @@ a.country-card:hover .country-card__arrow {
 .photo-credits a {
   color: inherit;
 }
+
+
+/* /admin/prices */
+.price-table-wrap { overflow-x: auto; margin: 16px 0; }
+.price-table { border-collapse: collapse; width: 100%; }
+.price-table th, .price-table td { border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; vertical-align: top; }
+.price-table input[type="text"] { width: 7em; padding: 6px 8px; font-size: 16px; }
+.price-table__hint { display: block; font-size: 12px; color: #6b7280; margin-top: 4px; }
+.price-reset { margin: 6px 0; }

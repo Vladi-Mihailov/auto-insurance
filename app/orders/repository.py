@@ -66,6 +66,17 @@ def create_order(
     engine_power: int | None = None,
     model_year: int | None = None,
     date_of_birth: date | None = None,
+    channel: str = "web",
+    bot_key: str | None = None,
+    telegram_user_id: int | None = None,
+    telegram_chat_id: int | None = None,
+    telegram_username: str | None = None,
+    acquisition_source: str | None = None,
+    client_checkout_id: str | None = None,
+    vehicle_make_document: str | None = None,
+    vehicle_model_document: str | None = None,
+    payment_mode: str | None = None,
+    created_by_telegram_user_id: int | None = None,
 ) -> Order:
     """Creates an order already holding the full pre-order draft: category,
     period, dates, price, vehicle catalog data and the policyholder's
@@ -100,8 +111,11 @@ def create_order(
             owner_same_as_policyholder, owner_entity_type, owner_full_name, owner_identifier, owner_citizenship, owner_phone, owner_email,
             customer_currency, purchase_currency,
             engine_power, model_year, date_of_birth,
+            channel, bot_key, telegram_user_id, telegram_chat_id, telegram_username, acquisition_source,
+            client_checkout_id, vehicle_make_document, vehicle_model_document,
+            payment_mode, created_by_telegram_user_id,
             resume_token, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "",  # public_number filled in below once we have the id
@@ -147,6 +161,17 @@ def create_order(
             engine_power,
             model_year,
             date_of_birth.isoformat() if date_of_birth else None,
+            channel,
+            bot_key,
+            telegram_user_id,
+            telegram_chat_id,
+            telegram_username,
+            acquisition_source,
+            client_checkout_id,
+            vehicle_make_document,
+            vehicle_model_document,
+            payment_mode,
+            created_by_telegram_user_id,
             resume_token,
             now,
             now,
@@ -407,3 +432,91 @@ def update_vehicle_fields(
         ),
     )
     conn.commit()
+
+
+def get_order_by_client_checkout_id(conn: sqlite3.Connection, client_checkout_id: str) -> Order | None:
+    row = conn.execute("SELECT * FROM insurance_orders WHERE client_checkout_id = ?", (client_checkout_id,)).fetchone()
+    return Order.from_row(row) if row else None
+
+
+def transition_if(
+    conn: sqlite3.Connection,
+    order_id: int,
+    from_status: OrderStatus,
+    to_status: OrderStatus,
+    *,
+    note: str | None = None,
+    commit: bool = True,
+) -> int | None:
+    """Compare-and-set status change: moves the order from_status ->
+    to_status ONLY if it is still in from_status at the moment of the
+    UPDATE (a single atomic statement), so two concurrent actors (two
+    managers, the bot and the web admin) can never both perform the same
+    transition. Enforces the state machine like set_status and writes the
+    same history row. Returns the new history row id, or None when the
+    order was no longer in from_status (nothing changed).
+
+    commit=False lets the caller write related rows (e.g. outbox jobs) in
+    the same transaction and commit them together."""
+    ensure_transition_allowed(from_status, to_status)
+    now = _now()
+    cursor = conn.execute(
+        "UPDATE insurance_orders SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+        (to_status.value, now, order_id, from_status.value),
+    )
+    if cursor.rowcount != 1:
+        return None
+    history = conn.execute(
+        """
+        INSERT INTO insurance_order_status_history (order_id, from_status, to_status, note, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (order_id, from_status.value, to_status.value, note, now),
+    )
+    if commit:
+        conn.commit()
+    return history.lastrowid
+
+
+def list_telegram_orders(conn: sqlite3.Connection, *, bot_key: str, telegram_user_id: int) -> list[Order]:
+    """Newest first."""
+    rows = conn.execute(
+        """SELECT * FROM insurance_orders WHERE channel = 'telegram' AND bot_key = ? AND telegram_user_id = ?
+           ORDER BY id DESC""",
+        (bot_key, telegram_user_id),
+    ).fetchall()
+    return [Order.from_row(row) for row in rows]
+
+
+def list_bot_orders(
+    conn: sqlite3.Connection, *, bot_key: str, statuses: list[str] | None = None, limit: int, offset: int = 0,
+    oldest_first: bool = False,
+) -> list[Order]:
+    """One bot's Telegram orders (all customers) -- for that bot's staff
+    screens only. Newest first unless oldest_first."""
+    where, params = "channel = 'telegram' AND bot_key = ?", [bot_key]
+    if statuses:
+        where += f" AND status IN ({', '.join('?' for _ in statuses)})"
+        params += list(statuses)
+    rows = conn.execute(
+        f"SELECT * FROM insurance_orders WHERE {where} ORDER BY id {'ASC' if oldest_first else 'DESC'} LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    ).fetchall()
+    return [Order.from_row(row) for row in rows]
+
+
+def count_bot_orders(conn: sqlite3.Connection, *, bot_key: str, statuses: list[str] | None = None) -> int:
+    where, params = "channel = 'telegram' AND bot_key = ?", [bot_key]
+    if statuses:
+        where += f" AND status IN ({', '.join('?' for _ in statuses)})"
+        params += list(statuses)
+    return conn.execute(f"SELECT COUNT(*) FROM insurance_orders WHERE {where}", params).fetchone()[0]
+
+
+def was_payment_rejected(conn: sqlite3.Connection, order_id: int) -> bool:
+    """The order's latest transition was a manager's "оплата не поступила"."""
+    row = conn.execute(
+        "SELECT from_status, to_status FROM insurance_order_status_history WHERE order_id = ? ORDER BY id DESC LIMIT 1",
+        (order_id,),
+    ).fetchone()
+    return bool(row) and row["from_status"] == "payment_review" and row["to_status"] == "awaiting_payment"

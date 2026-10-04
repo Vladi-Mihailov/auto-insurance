@@ -30,12 +30,16 @@ all -- see the docstring on _SYSTEM_PROMPT below).
 """
 
 import base64
+import logging
 import time
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
+from app.diagnostics import unicode_error_details
 from app.ocr.models import OcrResult
+
+logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 1  # one retry, only for transient network/rate-limit errors
 _RETRY_DELAY_SECONDS = 1.0
@@ -299,6 +303,37 @@ def classify_error(exc: Exception, *, attempt: int) -> dict:
     }
 
 
+def api_key_problem(api_key: str | None) -> str | None:
+    """Why this value can't be an OpenAI API key, or None if it can be.
+
+    The key is sent as an HTTP header ("Authorization: Bearer <key>"), and
+    HTTP header values must be ASCII -- a value with e.g. Cyrillic letters
+    (an untouched placeholder), a BOM or a non-breaking space makes EVERY
+    request fail with UnicodeEncodeError before it leaves the machine. The
+    description never contains the value itself, only counts/positions."""
+    if not api_key:
+        return "not set"
+    non_ascii = [i for i, ch in enumerate(api_key) if ord(ch) > 127]
+    if non_ascii:
+        return f"contains {len(non_ascii)} non-ASCII character(s), first at position {non_ascii[0]} of {len(api_key)}"
+    if any(ch.isspace() for ch in api_key) or not api_key.isprintable():
+        return "contains whitespace or control characters"
+    return None
+
+
+def build_ocr_provider(api_key: str | None, model: str) -> "OcrProvider | None":
+    """The ONE place a production provider is built (web + Telegram bot).
+    None = recognition unavailable -- callers already show that plainly and
+    offer manual entry. A configured-but-unusable key is logged once, safely."""
+    problem = api_key_problem(api_key)
+    if problem == "not set":
+        return None
+    if problem is not None:
+        logger.warning("OCR disabled: OPENAI_API_KEY is not a valid API key (%s) -- fix it in .env", problem)
+        return None
+    return OpenAIVisionOcrProvider(api_key=api_key, model=model)
+
+
 class OcrProvider(ABC):
     @abstractmethod
     def recognize(self, images: list[tuple[bytes, str]]) -> OcrResult:
@@ -347,6 +382,35 @@ class OpenAIVisionOcrProvider(OcrProvider):
         self._openai = openai
 
     def recognize(self, images: list[tuple[bytes, str]]) -> OcrResult:
+        """Substages (reported in OcrProviderError.classification["substage"]
+        on failure): request_build -> provider_request -> response_parse."""
+        substage = "request_build"
+        try:
+            content = self._build_content(images)
+            substage = "provider_request"
+            response = self._request(content)
+            substage = "response_parse"
+            return self._parse_response(response)
+        except OcrProviderError as exc:
+            exc.classification.setdefault("substage", substage)
+            raise
+        except UnicodeError as exc:
+            # e.g. a non-ASCII character in a value that must travel as an
+            # HTTP header -- classified safely (codec, reason, code points),
+            # never with the surrounding text.
+            raise OcrProviderError(
+                "request/response could not be encoded",
+                classification={"category": "encoding", "substage": substage, **unicode_error_details(exc)},
+            ) from exc
+        except (ValueError, TypeError, AttributeError) as exc:
+            if substage != "response_parse":
+                raise
+            raise OcrProviderError(
+                "malformed structured output",
+                classification={"category": "response_parse", "substage": substage, "exception_class": type(exc).__name__},
+            ) from exc
+
+    def _build_content(self, images: list[tuple[bytes, str]]) -> list[dict]:
         # All photos go into ONE request as separate input_image parts --
         # matching ai-lead-radar/reader/ocr/service.py::OcrService.extract.
         # Never one API call per photo: the model has to see every image at
@@ -363,18 +427,19 @@ class OpenAIVisionOcrProvider(OcrProvider):
                     "detail": "auto",
                 }
             )
+        return content
 
+    def _request(self, content: list[dict]):
         attempt = 0
         while True:
             attempt += 1
             try:
-                response = self._client.responses.parse(
+                return self._client.responses.parse(
                     model=self._model,
                     instructions=_SYSTEM_PROMPT,
                     input=[{"role": "user", "content": content}],
                     text_format=_VehicleFieldsSchema,
                 )
-                return self._parse_response(response)
             except (self._openai.APIConnectionError, self._openai.APITimeoutError, self._openai.RateLimitError) as exc:
                 if attempt > _MAX_RETRIES:
                     raise OcrProviderError("transient failure after retry", classification=classify_error(exc, attempt=attempt)) from exc

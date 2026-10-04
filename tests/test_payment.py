@@ -14,16 +14,23 @@ test_routes_smoke.py -- upsert_category is a true idempotent upsert, so
 this is safe regardless of test collection order.
 """
 
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.catalog.repository import mark_models_synced, upsert_category, upsert_manufacturer, upsert_model
+from app.dates.rules import today_in_georgia
 from app.db import get_connection
 from app.deps import PROJECT_ROOT, get_settings
 from app.main import app
 from app.orders.repository import get_order_by_token
 from app.orders.state_machine import OrderStatus
 from policyholder_helpers import valid_policyholder_data
+
+# Relative to Georgia's own "today" (same rule the /date step validates
+# against) -- never a fixed literal that silently expires.
+_START_DATE = (today_in_georgia() + timedelta(days=30)).isoformat()
 
 _settings = get_settings()
 _conn = get_connection(_settings.app.db_file)
@@ -38,7 +45,7 @@ _conn.close()
 
 def _create_order_awaiting_payment(client_, plate="PAY001AA"):
     client_.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
-    client_.post("/date", data={"start_date": "2026-08-20"})
+    client_.post("/date", data={"start_date": _START_DATE})
     client_.post("/method", data={"choice": "manual"})
     client_.post(
         "/vehicle",
@@ -240,7 +247,10 @@ def test_admin_orders_fails_closed_when_not_configured():
 # --------------------------- 12: admin list scope -------------------------------
 
 
-def test_admin_list_contains_only_payment_review_orders(admin_configured):
+def test_admin_list_offers_confirm_reject_only_for_payment_review_orders(admin_configured):
+    """/admin/orders deliberately shows every in-flight status group (see
+    app.web.admin_routes._VISIBLE_STATUSES) -- but the confirm/reject
+    actions exist only for PAYMENT_REVIEW orders."""
     client_ = TestClient(app)
     awaiting_token = _create_order_awaiting_payment(client_, plate="PAY002BB")
     review_token = _create_order_awaiting_payment(client_, plate="PAY003CC")
@@ -248,16 +258,23 @@ def test_admin_list_contains_only_payment_review_orders(admin_configured):
 
     response = client_.get("/admin/orders", auth=("admin", "s3cret-test-only"))
     assert response.status_code == 200
-    review_order = _order(review_token)
-    awaiting_order = _order(awaiting_token)
-    assert review_order.public_number in response.text
-    assert awaiting_order.public_number not in response.text
+    assert _order(review_token).public_number in response.text
+    assert f"/admin/orders/{review_token}/confirm" in response.text
+    assert f"/admin/orders/{review_token}/reject" in response.text
+    assert f"/admin/orders/{awaiting_token}/confirm" not in response.text
+    assert f"/admin/orders/{awaiting_token}/reject" not in response.text
 
 
 # --------------------------- 13-16: admin confirm/reject ------------------------
 
 
-def test_admin_confirm_transitions_to_paid(admin_configured):
+def test_admin_confirm_transitions_to_paid(admin_configured, monkeypatch):
+    """Success path: operator notification delivered -> plain redirect. The
+    not-delivered path (?telegram_notify_failed=1) is covered in
+    tests/test_telegram_notifications.py."""
+    from app.web import admin_routes
+
+    monkeypatch.setattr(admin_routes, "notify_operator_order_paid", lambda **kwargs: True)
     client_ = TestClient(app)
     resume_token = _create_order_awaiting_payment(client_, plate="PAY004DD")
     client_.post(f"/o/{resume_token}/confirm-payment")

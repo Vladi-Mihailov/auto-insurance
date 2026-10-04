@@ -2,14 +2,10 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from app.formatting import format_rub as _format_rub
+
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-
-def _format_rub(value: int) -> str:
-    return f"{value:,}".replace(",", " ")
-
-
 templates.env.filters["rub"] = _format_rub
 
 

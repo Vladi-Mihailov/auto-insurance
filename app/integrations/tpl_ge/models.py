@@ -13,6 +13,11 @@ class IssuanceStatus(str, Enum):
     grained progress of getting there."""
 
     PENDING = "pending"  # tpl_uid allocated; POST /api/policies not yet successful
+    # POST /api/policies is being / was sent and its outcome is NOT known
+    # yet (claimed atomically right before the request; a crash, timeout or
+    # network error leaves it here). Never re-sent from this state -- only
+    # resolved by probing TPL for the uid (service._recover_requested).
+    APPLICATION_REQUESTED = "application_requested"
     APPLICATION_CREATED = "application_created"  # POST /api/policies succeeded
     BOG_LINK_READY = "bog_link_ready"  # GET /ecommerce/bog succeeded, URL stored
     OPERATOR_REPORTED_PAID = "operator_reported_paid"  # manual "Оплата TPL завершена"
@@ -53,6 +58,9 @@ class TplIssuance:
     # while staying NULL (permitting exactly one resend) if a prior
     # delivery attempt failed.
     policy_sent_to_operator_at: datetime | None = None
+    # When the (single) POST /api/policies was claimed -- see
+    # IssuanceStatus.APPLICATION_REQUESTED.
+    application_requested_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "TplIssuance":
@@ -77,6 +85,9 @@ class TplIssuance:
             policy_sent_to_operator_at=(
                 datetime.fromisoformat(row["policy_sent_to_operator_at"]) if row["policy_sent_to_operator_at"] else None
             ),
+            application_requested_at=(
+                datetime.fromisoformat(row["application_requested_at"]) if row["application_requested_at"] else None
+            ),
         )
 
     @property
@@ -86,6 +97,10 @@ class TplIssuance:
     @property
     def is_operator_reported_paid(self) -> bool:
         return self.issuance_status == IssuanceStatus.OPERATOR_REPORTED_PAID.value
+
+    @property
+    def is_application_requested(self) -> bool:
+        return self.issuance_status == IssuanceStatus.APPLICATION_REQUESTED.value
 
     @property
     def is_failed(self) -> bool:

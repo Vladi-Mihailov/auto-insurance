@@ -150,3 +150,17 @@ class VehicleDataCandidates:
             for value in (self.registration_number, self.identifier, self.manufacturer_id, self.model_id)
             if value
         )
+
+
+def combine_ocr_results(primary: OcrResult, secondary: OcrResult) -> OcrResult:
+    """Field-wise union of two recognition attempts over the same case:
+    every field keeps the primary attempt's value, and only a field the
+    primary left empty is taken from the secondary one. Used for the single
+    orientation-retry attempt (see app.telegram_bot.documents) -- a retry
+    can fill gaps, never overwrite what the first attempt already read."""
+    values = {
+        name: getattr(primary, name) if getattr(primary, name) else getattr(secondary, name)
+        for name in primary.__dataclass_fields__
+        if name != "provider"
+    }
+    return OcrResult(provider=primary.provider, **values)

@@ -771,3 +771,93 @@ def test_download_policy_pdf_delegates_to_the_client_with_the_given_url(monkeypa
 
     assert content == b"%PDF-1.4 fake"
     assert calls == ["https://ext-stream.tpl.ge/policies//abc/policy-TPL1.pdf"]
+
+
+# ---------------------------------------------------------------------------
+# One POST /api/policies per order, even across timeouts, crashes and races
+# ---------------------------------------------------------------------------
+
+
+def _age_claim(conn, order_id, minutes=10):
+    from datetime import datetime, timezone
+
+    old = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    conn.execute("UPDATE insurance_tpl_issuance SET application_requested_at = ? WHERE order_id = ?", (old, order_id))
+    conn.commit()
+
+
+def test_unknown_application_outcome_is_never_resent(conn, catalog_ids, monkeypatch, configured_settings):
+    import httpx
+
+    from app.integrations.tpl_ge.errors import ApplicationOutcomeUnknownError, IssuanceInProgressError
+
+    def _timeout(payload):
+        raise httpx.ReadTimeout("no answer")
+
+    calls = _patch_http_layer(monkeypatch, create_application=_timeout)
+    order = _paid_order(conn, catalog_ids)
+    settings = _settings_with(configured_settings)
+    with pytest.raises(ApplicationOutcomeUnknownError):
+        service.issue_tpl_policy(conn, order, settings)
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert issuance.is_application_requested and not issuance.application_already_created
+    assert get_order_by_id(conn, order.id).status == OrderStatus.PAID.value
+
+    monkeypatch.setattr(service.tpl_client, "create_application", lambda client, payload: calls.__setitem__("create_application", calls["create_application"] + 1))
+    with pytest.raises(IssuanceInProgressError):  # moments later: maybe still in flight
+        service.issue_tpl_policy(conn, get_order_by_id(conn, order.id), settings)
+    assert calls["create_application"] == 1 and calls["initiate_bog_payment"] == []
+
+    _age_claim(conn, order.id)
+    issuance = service.issue_tpl_policy(conn, get_order_by_id(conn, order.id), settings)  # probes, never re-posts
+    assert issuance.is_bog_link_ready and calls["create_application"] == 1
+    assert get_order_by_id(conn, order.id).status == OrderStatus.PROCESSING.value
+
+
+def test_unconfirmed_application_stays_blocked_when_the_probe_fails(conn, catalog_ids, monkeypatch, configured_settings):
+    import httpx
+
+    from app.integrations.tpl_ge.errors import ApplicationOutcomeUnknownError
+
+    def _timeout(payload):
+        raise httpx.ConnectError("reset")
+
+    def _unknown_uid(params):
+        raise service.tpl_client.BogHandoffHttpError("GET /ecommerce/bog -> 404")
+
+    calls = _patch_http_layer(monkeypatch, create_application=_timeout, initiate_bog_payment=_unknown_uid)
+    order = _paid_order(conn, catalog_ids)
+    settings = _settings_with(configured_settings)
+    with pytest.raises(ApplicationOutcomeUnknownError):
+        service.issue_tpl_policy(conn, order, settings)
+    _age_claim(conn, order.id)
+    with pytest.raises(ApplicationOutcomeUnknownError):
+        service.issue_tpl_policy(conn, get_order_by_id(conn, order.id), settings)
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert issuance.is_application_requested and "check tpl.ge manually" in issuance.last_error
+    assert calls["create_application"] == 1  # never a second POST
+
+
+def test_the_application_claim_is_won_exactly_once(conn, catalog_ids):
+    order = _paid_order(conn, catalog_ids)
+    tpl_repo.create_issuance(conn, order.id, tpl_uid="claim-uid")
+    assert tpl_repo.claim_application_request(conn, order.id, tpl_product_id=1, tpl_purchase_price_gel=Decimal("30.00"))
+    assert not tpl_repo.claim_application_request(conn, order.id, tpl_product_id=1, tpl_purchase_price_gel=Decimal("30.00"))
+
+
+def test_a_read_failure_before_sending_leaves_a_clean_retry(conn, catalog_ids, monkeypatch, configured_settings):
+    import httpx
+
+    calls = _patch_http_layer(monkeypatch)
+
+    def _down(client):
+        raise httpx.ConnectError("tpl.ge down")
+
+    monkeypatch.setattr(service.catalog_client, "fetch_categories", _down)
+    order = _paid_order(conn, catalog_ids)
+    with pytest.raises(httpx.ConnectError):
+        service.issue_tpl_policy(conn, order, _settings_with(configured_settings))
+    assert tpl_repo.get_issuance_by_order_id(conn, order.id).issuance_status == "pending"  # nothing was sent
+    monkeypatch.setattr(service.catalog_client, "fetch_categories", lambda client: _LIVE_CATEGORIES)
+    service.issue_tpl_policy(conn, get_order_by_id(conn, order.id), _settings_with(configured_settings))
+    assert calls["create_application"] == 1

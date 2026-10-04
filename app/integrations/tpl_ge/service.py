@@ -34,7 +34,7 @@ import re
 import sqlite3
 import time
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import parse_qs, urlsplit
 
@@ -45,7 +45,9 @@ from app.integrations.tpl_ge import client as tpl_client
 from app.integrations.tpl_ge import repository as tpl_repo
 from app.integrations.tpl_ge.client import BogHandoffHttpError, PolicyLookupHttpError, TplPoliciesError
 from app.integrations.tpl_ge.errors import (
+    ApplicationOutcomeUnknownError,
     BogHandoffError,
+    IssuanceInProgressError,
     MissingRequiredDataError,
     PolicyNotReadyError,
     PolicyRetrievalError,
@@ -56,7 +58,7 @@ from app.integrations.tpl_ge.errors import (
 )
 from app.integrations.tpl_ge.models import LiveProduct, TplIssuance
 from app.orders.models import Order
-from app.orders.repository import set_status
+from app.orders.repository import get_order_by_id, set_status
 from app.orders.state_machine import OrderStatus
 from app.settings import Settings
 
@@ -285,10 +287,24 @@ def _create_application(conn: sqlite3.Connection, order: Order, issuance: TplIss
             visitor_id=settings.tpl_ge.static_visitor_id,
         )
 
+        # Everything above only READ from TPL. From here on a real
+        # application may come into existence -- claim the single POST
+        # first (committed), so no other click/process can ever send one too.
+        if not tpl_repo.claim_application_request(
+            conn, order.id, tpl_product_id=product.product_id, tpl_purchase_price_gel=product.price_gel
+        ):
+            raise IssuanceInProgressError("The TPL application for this order is already being sent")
         try:
             tpl_client.create_application(client, payload)
         except TplPoliciesError as exc:
+            # A definite non-200 answer: TPL did not create anything.
+            tpl_repo.mark_failed(conn, order.id, error_message=f"TPL rejected the application: {exc}")
             raise TplApplicationError(f"TPL rejected the application: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 -- timeout/network/anything: the outcome is unknown
+            raise ApplicationOutcomeUnknownError(
+                f"No answer from TPL to the application ({type(exc).__name__}) -- it may or may not exist; "
+                "it is never re-sent automatically"
+            ) from exc
 
     tpl_repo.mark_application_created(conn, order.id, tpl_product_id=product.product_id, tpl_purchase_price_gel=product.price_gel)
 
@@ -327,14 +343,22 @@ def issue_tpl_policy(conn: sqlite3.Connection, order: Order, settings: Settings)
     if issuance is None:
         issuance = tpl_repo.create_issuance(conn, order.id, tpl_uid=str(uuid.uuid4()))
 
+    if issuance.is_application_requested:
+        # A previous attempt sent (or was sending) the application and never
+        # learned the outcome: find out, never send a second one.
+        return _recover_requested(conn, order, issuance, settings)
+
     if not issuance.application_already_created:
         try:
             _create_application(conn, order, issuance, settings)
-        except TplIssuanceError as exc:
-            tpl_repo.mark_failed(conn, order.id, error_message=str(exc))
+        except (ApplicationOutcomeUnknownError, IssuanceInProgressError) as exc:
+            tpl_repo.record_error(conn, order.id, error_message=str(exc))  # status stays APPLICATION_REQUESTED
             raise
-        if order.status == OrderStatus.PAID.value:
-            set_status(conn, order.id, OrderStatus.PROCESSING, note="TPL application created")
+        except TplIssuanceError as exc:
+            if not tpl_repo.get_issuance_by_order_id(conn, order.id).is_failed:
+                tpl_repo.mark_failed(conn, order.id, error_message=str(exc))  # nothing was sent: safe to retry
+            raise
+        _mark_processing(conn, order)
         issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
         assert issuance is not None
 
@@ -344,6 +368,40 @@ def issue_tpl_policy(conn: sqlite3.Connection, order: Order, settings: Settings)
         tpl_repo.record_error(conn, order.id, error_message=str(exc))
         raise
 
+    issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
+    assert issuance is not None
+    return issuance
+
+
+# How long a fresh APPLICATION_REQUESTED claim is treated as "another
+# attempt is sending it right now" (the HTTP timeout is 30 s).
+_IN_FLIGHT = timedelta(minutes=2)
+
+
+def _mark_processing(conn: sqlite3.Connection, order: Order) -> None:
+    current = get_order_by_id(conn, order.id)
+    if current is not None and current.status == OrderStatus.PAID.value:
+        set_status(conn, order.id, OrderStatus.PROCESSING, note="TPL application created")
+
+
+def _recover_requested(conn: sqlite3.Connection, order: Order, issuance: TplIssuance, settings: Settings) -> TplIssuance:
+    """The application request's outcome is unknown. Probe TPL with the
+    SAME uid: a BOG payment link is only ever issued for an application TPL
+    actually has -- so success proves it exists (and is the next step
+    anyway). A failed probe leaves everything as it is: never re-sent."""
+    requested = issuance.application_requested_at
+    if requested is not None and datetime.now(timezone.utc) - requested < _IN_FLIGHT:
+        raise IssuanceInProgressError("The TPL application for this order is being sent right now -- try again in a minute")
+    try:
+        _refresh_bog_link(conn, order, issuance, settings)
+    except TplIssuanceError as exc:
+        message = (
+            "The TPL application's outcome is unknown and TPL did not confirm it "
+            f"({exc}) -- check tpl.ge manually; it is never re-sent automatically"
+        )
+        tpl_repo.record_error(conn, order.id, error_message=message)
+        raise ApplicationOutcomeUnknownError(message) from exc
+    _mark_processing(conn, order)  # mark_bog_link_ready already moved issuance_status on
     issuance = tpl_repo.get_issuance_by_order_id(conn, order.id)
     assert issuance is not None
     return issuance

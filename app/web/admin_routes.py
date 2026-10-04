@@ -19,7 +19,8 @@ from app.integrations.tpl_ge import service as tpl_ge_service
 from app.integrations.tpl_ge.errors import TplIssuanceError
 from app.notifications.telegram import notify_operator_order_paid, notify_operator_policy_ready
 from app.orders.models import Order
-from app.orders.repository import get_latest_transition_at, list_orders_by_status, set_status
+from app.orders.payment import confirm_payment, reject_payment
+from app.orders.repository import get_latest_transition_at, list_orders_by_status
 from app.orders.state_machine import OrderStatus
 from app.pricing.provider import get_period
 from app.web.templating import render
@@ -127,9 +128,11 @@ def post_admin_confirm_payment(
     confirmed by the time it runs. A failure only redirects with a query
     flag so the admin list can surface it (see get_admin_orders).
     """
-    if order.status == OrderStatus.PAYMENT_REVIEW.value:
-        set_status(conn, order.id, OrderStatus.PAID, note="admin confirmed payment")
-
+    confirmation = confirm_payment(conn, order.id, actor="web admin")
+    # A Telegram-channel order's customer + manager notifications were just
+    # enqueued by confirm_payment (the bot delivers them); it never also
+    # gets the Telethon operator message.
+    if confirmation.changed and order.channel != "telegram":
         settings = get_settings()
         category_name = order.vehicle_category_code
         if order.vehicle_category_code:
@@ -166,8 +169,7 @@ def post_admin_reject_payment(
     this must never roll a confirmed payment back to AWAITING_PAYMENT, even
     from a stale admin page loaded before someone else already confirmed
     it."""
-    if order.status == OrderStatus.PAYMENT_REVIEW.value:
-        set_status(conn, order.id, OrderStatus.AWAITING_PAYMENT, note="admin payment not found")
+    reject_payment(conn, order.id, actor="web admin")
     return RedirectResponse("/admin/orders", status_code=303)
 
 

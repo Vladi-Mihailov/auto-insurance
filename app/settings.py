@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 
 class ConfigError(Exception):
@@ -148,6 +148,12 @@ class OcrSettings(BaseModel):
     # than falling back to a hidden stub in production.
     openai_api_key: str | None = None
     vision_model: str = "gpt-5-mini"
+    # Optional local orientation detection before OCR (see
+    # app.ocr.orientation): "auto" (Tesseract if its binary is found, else
+    # none), "tesseract" (same, but warns when missing), or "off". Never a
+    # hard requirement -- without Tesseract the pipeline runs unchanged.
+    orientation_detector: str = "auto"
+    tesseract_cmd: str | None = None
 
 
 class AdminSettings(BaseModel):
@@ -198,6 +204,71 @@ class TelegramOperatorSettings(BaseModel):
     session_path: Path = Path("data/sessions/auto_insurance_operator")
 
 
+class TelegramBotSettings(BaseModel):
+    # Bot API credentials/identity for the customer-facing Telegram sales bot
+    # (app.telegram_bot) -- a DIFFERENT thing from TelegramOperatorSettings
+    # above (a Telethon user account used for web-order operator pings).
+    # Environment-only, never config.yaml. token is a SecretStr so it never
+    # shows up in a repr()/log line by accident. manager_ids_raw is kept
+    # unparsed here on purpose: it is validated only when the bot itself
+    # starts (app.telegram_bot.config.load_bot_config), so a typo in a
+    # bot-only variable can never stop the web app from starting.
+    token: SecretStr | None = None
+    bot_key: str | None = None
+    manager_ids_raw: str | None = None
+    # Optional: the initial bot owner (may add/remove managers). Unset ->
+    # the only configured manager becomes owner (app.telegram_bot.staff).
+    owner_id_raw: str | None = None
+    # TELEGRAM_TPL_AUTO_ISSUANCE: when off (the default), a confirmed
+    # CUSTOMER payment never starts the tpl.ge issuance and the manager card
+    # offers only the manual policy upload; the tpl.ge code stays in place
+    # for operator orders and for turning this on later.
+    tpl_auto_issuance: bool = False
+
+
+class TelegramPaymentSettings(BaseModel):
+    # Manual transfer details shown to Telegram-bot customers (separate from
+    # the web checkout's PaymentSettings). Environment-only. phone_number and
+    # recipient are SecretStr so they never appear in a repr()/log line.
+    # All of bank_name/phone_number/recipient are REQUIRED before any detail
+    # is shown -- an incomplete configuration shows the customer "оплата
+    # временно недоступна" instead of partial/broken details.
+    bank_name: str | None = None
+    phone_number: SecretStr | None = None
+    recipient: SecretStr | None = None
+    instructions: str | None = None
+
+    def missing_variables(self) -> list[str]:
+        missing = []
+        if not self.bank_name:
+            missing.append("TELEGRAM_PAYMENT_BANK_NAME")
+        if self.phone_number is None or not self.phone_number.get_secret_value().strip():
+            missing.append("TELEGRAM_PAYMENT_PHONE_NUMBER")
+        if self.recipient is None or not self.recipient.get_secret_value().strip():
+            missing.append("TELEGRAM_PAYMENT_RECIPIENT")
+        return missing
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.missing_variables()
+
+
+class TelegramBotProfileConfig(BaseModel):
+    # Non-secret bot identity/branding (config.yaml telegram_bots.<bot_key>)
+    # -- see app.telegram_bot.profile.BotProfile. Nothing bot-specific lives
+    # in code: a second bot is a second entry here plus its own env vars.
+    country_code: str
+    username: str | None = None
+    intro_title: str
+    intro_text: str
+    # Optional fixed contact details this bot puts on every order it takes
+    # (the policyholder email/phone fields tpl.ge issuance needs). When set,
+    # the bot never asks its customers for email/phone. Validated at bot
+    # startup (app.telegram_bot.config.load_bot_config).
+    customer_email: str | None = None
+    customer_phone: str | None = None
+
+
 class Settings(BaseModel):
     app: AppSettings
     pricing: PricingSettings
@@ -208,6 +279,14 @@ class Settings(BaseModel):
     admin: AdminSettings = AdminSettings()
     tpl_ge: TplGeSettings = TplGeSettings()
     telegram_operator: TelegramOperatorSettings = TelegramOperatorSettings()
+    telegram_bot: TelegramBotSettings = TelegramBotSettings()
+    telegram_payment: TelegramPaymentSettings = TelegramPaymentSettings()
+    telegram_bot_profiles: dict[str, TelegramBotProfileConfig] = {}
+
+
+def _env_text(name: str) -> str | None:
+    value = (os.getenv(name) or "").strip()
+    return value or None
 
 
 def _parse_bool(value: str | None) -> bool:
@@ -230,7 +309,11 @@ def _parse_telegram_chat_id(value: str | None) -> int | str | None:
 
 def load_settings(project_root: Path) -> Settings:
     project_root = Path(project_root)
-    load_dotenv(project_root / ".env")
+    # Tests set INSURANCE_LOAD_DOTENV=0 (see tests/conftest.py) so a
+    # developer's real .env -- OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, manager
+    # ids, ... -- can never leak into a test run. Production never sets it.
+    if os.getenv("INSURANCE_LOAD_DOTENV", "1") != "0":
+        load_dotenv(project_root / ".env")
 
     # Override used only by tests (see tests/conftest.py + tests/fixtures/) so
     # they can exercise the full priced happy path without a real business
@@ -280,6 +363,15 @@ def load_settings(project_root: Path) -> Settings:
     catalog_raw = raw.get("catalog", {})
     enabled_category_codes_by_country = catalog_raw.get("enabled_category_codes_by_country", {}) or {}
 
+    try:
+        telegram_bot_profiles = {
+            bot_key: TelegramBotProfileConfig(**profile) for bot_key, profile in (raw.get("telegram_bots") or {}).items()
+        }
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Invalid telegram_bots structure in {config_path}: {exc}") from exc
+
+    bot_token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+
     return Settings(
         app=AppSettings(
             db_file=db_file,
@@ -307,6 +399,8 @@ def load_settings(project_root: Path) -> Settings:
         ocr=OcrSettings(
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             vision_model=os.getenv("OCR_VISION_MODEL", "gpt-5-mini"),
+            orientation_detector=(os.getenv("OCR_ORIENTATION_DETECTOR") or "auto").strip().lower(),
+            tesseract_cmd=(os.getenv("OCR_TESSERACT_CMD") or "").strip() or None,
         ),
         admin=AdminSettings(
             username=os.getenv("ADMIN_USERNAME") or None,
@@ -322,4 +416,18 @@ def load_settings(project_root: Path) -> Settings:
             chat_id=_parse_telegram_chat_id(os.getenv("TELEGRAM_OPERATOR_CHAT_ID")),
             session_path=project_root / os.getenv("TELEGRAM_OPERATOR_SESSION_PATH", "data/sessions/auto_insurance_operator"),
         ),
+        telegram_bot=TelegramBotSettings(
+            token=SecretStr(bot_token) if bot_token else None,
+            bot_key=(os.getenv("TELEGRAM_BOT_KEY") or "").strip() or None,
+            manager_ids_raw=(os.getenv("TELEGRAM_BOT_MANAGER_IDS") or "").strip() or None,
+            owner_id_raw=(os.getenv("TELEGRAM_BOT_OWNER_ID") or "").strip() or None,
+            tpl_auto_issuance=_parse_bool(os.getenv("TELEGRAM_TPL_AUTO_ISSUANCE")),
+        ),
+        telegram_payment=TelegramPaymentSettings(
+            bank_name=_env_text("TELEGRAM_PAYMENT_BANK_NAME"),
+            phone_number=SecretStr(_env_text("TELEGRAM_PAYMENT_PHONE_NUMBER")) if _env_text("TELEGRAM_PAYMENT_PHONE_NUMBER") else None,
+            recipient=SecretStr(_env_text("TELEGRAM_PAYMENT_RECIPIENT")) if _env_text("TELEGRAM_PAYMENT_RECIPIENT") else None,
+            instructions=_env_text("TELEGRAM_PAYMENT_INSTRUCTIONS"),
+        ),
+        telegram_bot_profiles=telegram_bot_profiles,
     )

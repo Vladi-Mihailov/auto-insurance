@@ -52,3 +52,16 @@ class PolicyRetrievalError(TplIssuanceError):
     """GET /api/policies/{o.id} (or .../documents) returned something
     genuinely unexpected -- a non-2xx status or an unparseable body. Unlike
     PolicyNotReadyError, this is a real anomaly worth surfacing."""
+
+
+class ApplicationOutcomeUnknownError(TplIssuanceError):
+    """POST /api/policies was sent but its outcome is unknown (timeout,
+    network error, crash before the answer was saved) and TPL could not
+    confirm the application afterwards. Never retried automatically -- a
+    second POST could create a second, real application. Check tpl.ge
+    manually before doing anything else with this order."""
+
+
+class IssuanceInProgressError(TplIssuanceError):
+    """Another attempt for this order is sending the application right now
+    (claimed moments ago) -- wait for it instead of sending another."""

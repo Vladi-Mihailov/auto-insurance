@@ -147,7 +147,10 @@ def sync_models_on_demand(conn: sqlite3.Connection, manufacturer: Manufacturer, 
     try:
         with tpl_client.new_client(timeout=timeout) as client:
             raw_models = tpl_client.fetch_models(client, manufacturer.external_id)
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError):
+        # ValueError: a 200 response whose body isn't JSON (e.g. an anti-bot
+        # or maintenance page) -- same "sync failed, try again later" outcome
+        # as a network error, never an exception into the caller's request.
         return False
     sync_models_for_manufacturer(conn, manufacturer.id, raw_models)
     return True
