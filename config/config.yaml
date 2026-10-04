@@ -196,6 +196,27 @@ pricing:
       - code: "90d"
         label: "90 дней"
         price_tl: 4200
+    # "Truck / Camper" for @OSAGOTRbot (bot_key=osago24rt) ONLY -- reuses the
+    # "bus" vehicle_category_code under a bot-specific label (see
+    # telegram_bots.osago24rt.category_labels below and
+    # app.telegram_bot.categories), NOT the same thing as the "bus and
+    # trailer are INTENTIONALLY ABSENT" decision documented above: that
+    # decision is about the WEBSITE's TR product (strahovka-turkiye.com has
+    # no confirmed bus tariff) and is completely unaffected by this -- "bus"
+    # is still absent from catalog.enabled_category_codes_by_country.TR
+    # below, so the website's TR checkout never offers it. price_tl: null
+    # for both periods -- NO business-confirmed tariff exists yet for this
+    # bot-specific product; never guess a number (same rule as any other
+    # unpriced period, see this file's own top-of-file docstring). A manager
+    # can set a real price any time via the bot's own "💰 Цены" once one is
+    # confirmed by business.
+    bus:
+      - code: "30d"
+        label: "30 дней"
+        price_tl: null
+      - code: "90d"
+        label: "90 дней"
+        price_tl: null
 
 # Turkey-only TL->RUB conversion for pricing.TR's price_tl periods above --
 # see app.settings.TrTlConversionConfig and
@@ -334,3 +355,25 @@ telegram_bots:
     # for them. Omit both to make the bot ask its customers instead.
     customer_email: tplgee@mail.ru
     customer_phone: "+995 574 22 06 25"
+  # Turkey sales bot -- the real, registered Telegram username is
+  # @OSAGOTRbot (confirmed directly with the bot token; NOT "OSAGO24RTbot",
+  # an earlier placeholder name used before the bot was actually created).
+  # bot_key stays osago24rt regardless -- it's an internal identifier only,
+  # decoupled from the Telegram username by design (see module docstring
+  # above). No customer_email/customer_phone: no Turkey-specific fixed
+  # contact exists yet, so this bot asks its own customers directly, same
+  # as osago24ge would if those two were omitted.
+  osago24rt:
+    country_code: TR
+    username: OSAGOTRbot
+    intro_title: "🇹🇷 ОСАГО Турции"
+    intro_text: "Оформите страховку автомобиля для поездки в Турцию онлайн."
+    # This bot's OWN product set -- independent of
+    # catalog.enabled_category_codes_by_country.TR (the website's TR list,
+    # unaffected by this) -- see app.telegram_bot.categories. "bus" here is
+    # the SAME catalog code Georgia's "🚌 Автобус" uses, relabeled below for
+    # this bot only; see pricing.TR.bus's own comment for why this does not
+    # touch the website's documented bus/trailer exclusion for TR.
+    category_codes: [motorcycle, passenger_car, bus]
+    category_labels:
+      bus: "🚛 Truck / Camper"

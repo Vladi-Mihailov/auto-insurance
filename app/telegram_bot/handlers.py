@@ -10,7 +10,6 @@ draft, and every screen is re-derived from that draft.
 """
 
 import logging
-import re
 import traceback
 from datetime import date, timedelta
 from pathlib import Path
@@ -49,6 +48,7 @@ from app.telegram_bot.steps import (
     categories_view,
     go,
     offered_categories,
+    parse_start_date_input,
     periods_view,
     policyholder_complete,
     reset_checkout,
@@ -60,20 +60,6 @@ from app.telegram_bot.steps import (
 )
 
 logger = logging.getLogger(__name__)
-
-_DATE_INPUT_RE = re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$")
-
-
-def parse_start_date_input(text: str) -> date | None:
-    """DD.MM.YYYY (single-digit day/month tolerated) -> date, or None."""
-    match = _DATE_INPUT_RE.match(text or "")
-    if not match:
-        return None
-    day, month, year = (int(part) for part in match.groups())
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
 
 
 async def _show_view(target, view: View) -> None:

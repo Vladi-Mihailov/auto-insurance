@@ -26,6 +26,8 @@ from app.checkout.rules import (
     draft_country_code,
     duration_range_for,
     fixed_duration_date_rule,
+    requires_date_of_birth,
+    requires_model_year,
     validate_start_date,
 )
 from app.countries import match_citizenship_text
@@ -357,6 +359,13 @@ def vehicle_missing_fields(conn: sqlite3.Connection, draft: dict) -> list[str]:
         missing.extend(["manufacturer", "model"])
     elif "model_id" in catalog_errors:
         missing.append("model")
+    # Country-aware, same rule app.web.checkout_routes applies server-side
+    # (requires_model_year) -- GE never requires this, so draft.get(
+    # "model_year") being empty there is never "missing" anything.
+    if requires_model_year(draft_country_code(draft)):
+        model_year = draft.get("model_year")
+        if model_year is None or validate_model_year(str(model_year), current_year=today_in_georgia().year)[1]:
+            missing.append("model_year")
     return missing
 
 
@@ -376,6 +385,12 @@ def validate_policyholder_field(field: str, raw: str) -> tuple[str | None, str |
         return validate_identification_number(raw, field_label="Номер паспорта")
     if field == "citizenship":
         return validate_citizenship(raw)
+    if field == "date_of_birth":
+        # Stored (here and in the draft) as an ISO date string, same
+        # convention as start_date/end_date -- validate_date_of_birth itself
+        # returns a date object, see app.validation.
+        value, error = validate_date_of_birth(raw, today=today_in_georgia())
+        return (value.isoformat() if value else None), error
     if field == "contact_email":
         return validate_email(raw)
     if field == "contact_phone":
@@ -386,9 +401,16 @@ def validate_policyholder_field(field: str, raw: str) -> tuple[str | None, str |
 
 
 def policyholder_missing_fields(draft: dict) -> list[str]:
+    # Country-aware, same rule app.web.checkout_routes applies server-side
+    # (requires_date_of_birth) -- GE/AM never require this, so it's never
+    # "missing" for them. Spliced in right after citizenship to match the
+    # web form's own field order (app/web/templates/policyholder.html).
+    fields = list(POLICYHOLDER_FIELDS)
+    if requires_date_of_birth(draft_country_code(draft)):
+        fields.insert(fields.index("citizenship") + 1, "date_of_birth")
     return [
         field
-        for field in POLICYHOLDER_FIELDS
+        for field in fields
         if draft.get(field) is None or validate_policyholder_field(field, str(draft[field]))[1]
     ]
 

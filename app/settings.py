@@ -267,6 +267,25 @@ class TelegramBotProfileConfig(BaseModel):
     # startup (app.telegram_bot.config.load_bot_config).
     customer_email: str | None = None
     customer_phone: str | None = None
+    # Optional per-bot override of WHICH vehicle_category_code values this
+    # bot's checkout/price-management screens offer, and under what label --
+    # see app.telegram_bot.categories. Entirely separate from
+    # catalog.enabled_category_codes_by_country (app.checkout.rules.
+    # allowed_category_codes): that stays the single source of truth for a
+    # COUNTRY's website checkout availability and is never read or changed
+    # by this. None (the default -- Georgia today) means "keep using the
+    # country-level list exactly as before this field existed". A bot that
+    # sets category_codes gets EXACTLY that list, in that order, regardless
+    # of what the country-level list allows or excludes -- e.g. a bot may
+    # reuse an existing catalog category code (like "bus") under a
+    # completely different product/label than the one the country-level
+    # config documents for the website, without touching that config at all.
+    category_codes: list[str] | None = None
+    # code -> display label, overriding app.telegram_bot.texts.
+    # CATEGORY_LABELS for just this bot (falls back to that global dict,
+    # then to the catalog's own name, exactly as before for any code not
+    # listed here).
+    category_labels: dict[str, str] | None = None
 
 
 class Settings(BaseModel):

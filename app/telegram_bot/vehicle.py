@@ -26,15 +26,16 @@ from app.telegram_bot.steps import (
     manufacturer_name,
     next_vehicle_step,
 )
-from app.validation import validate_identifier, validate_registration_number
+from app.validation import validate_identifier, validate_model_year, validate_registration_number
+from app.dates.rules import today_in_georgia
 
 
 async def _rt(state: FSMContext) -> str:
     return (await state.get_data()).get("return_to") or ""
 
 
-def _changed(ctx: Ctx, updates: dict) -> None:
-    ctx.merge({**updates, "vehicle_confirmed": False})
+def _changed(ctx: Ctx, updates: dict) -> dict:
+    return ctx.merge({**updates, "vehicle_confirmed": False})
 
 
 async def on_plate_text(message: Message, state: FSMContext, ctx: Ctx):
@@ -42,8 +43,8 @@ async def on_plate_text(message: Message, state: FSMContext, ctx: Ctx):
     if error:
         await go(message, state, ctx, "plate", rt=await _rt(state), notice=texts.STEP_INVALID.format(error=error))
         return
-    _changed(ctx, {"registration_number": value})
-    await go(message, state, ctx, next_vehicle_step("plate", await _rt(state)), rt=await _rt(state))
+    draft = _changed(ctx, {"registration_number": value})
+    await go(message, state, ctx, next_vehicle_step("plate", await _rt(state), draft), rt=await _rt(state))
 
 
 async def _identifier_text(message: Message, state: FSMContext, ctx: Ctx, identifier_type: str, step: str):
@@ -54,8 +55,8 @@ async def _identifier_text(message: Message, state: FSMContext, ctx: Ctx, identi
         return
     # Exactly one identifier is ever stored (same model as the web form's
     # VIN/chassis toggle) -- entering one replaces the other.
-    _changed(ctx, {"identifier_type": identifier_type, "identifier": value})
-    await go(message, state, ctx, next_vehicle_step(step, rt), rt=rt)
+    draft = _changed(ctx, {"identifier_type": identifier_type, "identifier": value})
+    await go(message, state, ctx, next_vehicle_step(step, rt, draft), rt=rt)
 
 
 async def on_vin_text(message: Message, state: FSMContext, ctx: Ctx):
@@ -115,7 +116,7 @@ async def on_model(callback: CallbackQuery, callback_data: ModelCb, state: FSMCo
         else:
             updates["vehicle_model_text"] = None
         _changed(ctx, updates)
-        await go(callback, state, ctx, next_vehicle_step("model", rt), rt=rt)
+        await go(callback, state, ctx, next_vehicle_step("model", rt, draft), rt=rt)
     await callback.answer()
 
 
@@ -136,9 +137,20 @@ async def on_keep(callback: CallbackQuery, callback_data: KeepCb, state: FSMCont
         and not validate_identifier(draft.get("identifier") or "", "chassis")[1],
         "manufacturer": lambda: manufacturer_name(ctx, draft) is not None,
         "model": lambda: model_name(ctx, draft) is not None,
+        "model_year": lambda: not validate_model_year(str(draft.get("model_year") or ""), current_year=today_in_georgia().year)[1],
     }[step]()
-    await go(callback, state, ctx, next_vehicle_step(step, rt) if valid else step, rt=rt)
+    await go(callback, state, ctx, next_vehicle_step(step, rt, draft) if valid else step, rt=rt)
     await callback.answer()
+
+
+async def on_model_year_text(message: Message, state: FSMContext, ctx: Ctx):
+    value, error = validate_model_year(message.text or "", current_year=today_in_georgia().year)
+    rt = await _rt(state)
+    if error:
+        await go(message, state, ctx, "model_year", rt=rt, notice=texts.STEP_INVALID.format(error=error))
+        return
+    draft = _changed(ctx, {"model_year": value})
+    await go(message, state, ctx, next_vehicle_step("model_year", rt, draft), rt=rt)
 
 
 async def on_confirm(callback: CallbackQuery, state: FSMContext, ctx: Ctx):
@@ -167,6 +179,7 @@ def register(router: Router) -> None:
     router.message.register(on_chassis_text, Flow.chassis, F.text)
     router.message.register(on_manufacturer_text, Flow.manufacturer, F.text)
     router.message.register(on_model_text, Flow.model, F.text)
+    router.message.register(on_model_year_text, Flow.model_year, F.text)
     router.callback_query.register(on_manufacturer, ManufacturerCb.filter())
     router.callback_query.register(on_model, ModelCb.filter())
     router.callback_query.register(on_model_page, ModelPageCb.filter())

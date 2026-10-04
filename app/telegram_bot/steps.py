@@ -14,6 +14,7 @@ app.checkout / app.pricing / app.catalog.
 """
 
 import asyncio
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date
@@ -33,12 +34,18 @@ from aiogram.types import (
 from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
 from app.checkout import service as checkout_service
-from app.checkout.rules import category_period_step_completed, draft_country_code, duration_range_for
+from app.checkout.rules import (
+    category_period_step_completed,
+    draft_country_code,
+    duration_range_for,
+    requires_date_of_birth,
+    requires_model_year,
+)
 from app.countries import COUNTRIES
 from app.dates.rules import today_in_georgia
 from app.pricing.provider import get_period
 from app.sessions.repository import save_draft
-from app.telegram_bot import order_views, staff, texts
+from app.telegram_bot import categories, order_views, staff, texts
 from app.telegram_bot.context import Ctx
 from app.telegram_bot.keyboards import (
     CitizenshipCb,
@@ -76,21 +83,33 @@ class Flow(StatesGroup):
     chassis = State()
     manufacturer = State()
     model = State()
+    # Turkey-only (app.checkout.rules.requires_model_year) -- never reached
+    # for a country that doesn't require it, see next_vehicle_step.
+    model_year = State()
     documents = State()
     full_name = State()
     passport = State()
     citizenship = State()
+    # Turkey-only (app.checkout.rules.requires_date_of_birth) -- same gating.
+    date_of_birth = State()
     email = State()
     phone = State()
 
 
-VEHICLE_INPUT_STEPS = ("plate", "vin", "chassis", "manufacturer", "model")
-POLICY_STEPS = ("full_name", "passport", "citizenship", "email", "phone")
+# "model_year" IS a VEHICLE_INPUT_STEPS member (gets the same "✓ Keep"
+# affordance as plate/vin/manufacturer/model when EDITED from a review
+# screen, see vehicle.py::on_keep) even though the forward walk
+# (next_vehicle_step) auto-skips it whenever the draft already holds a
+# valid value (e.g. from OCR) -- editing and the forward walk are
+# independent paths, same as every other vehicle step.
+VEHICLE_INPUT_STEPS = ("plate", "vin", "chassis", "manufacturer", "model", "model_year")
+POLICY_STEPS = ("full_name", "passport", "citizenship", "date_of_birth", "email", "phone")
 # policyholder input step -> draft key (= insurance_orders column name)
 POLICY_STEP_FIELD = {
     "full_name": "full_name",
     "passport": "identification_number",
     "citizenship": "citizenship",
+    "date_of_birth": "date_of_birth",
     "email": "contact_email",
     "phone": "contact_phone",
 }
@@ -101,10 +120,12 @@ STEP_STATE = {
     "chassis": Flow.chassis,
     "manufacturer": Flow.manufacturer,
     "model": Flow.model,
+    "model_year": Flow.model_year,
     "documents": Flow.documents,
     "full_name": Flow.full_name,
     "passport": Flow.passport,
     "citizenship": Flow.citizenship,
+    "date_of_birth": Flow.date_of_birth,
     "email": Flow.email,
     "phone": Flow.phone,
 }
@@ -305,12 +326,18 @@ def resolve_step(ctx: Ctx, draft: dict, step: str, rt: str = "") -> str:
 def back_step(draft: dict, step: str, rt: str) -> str:
     if rt:
         return rt
+    if step == "email":
+        # Turkey only: date_of_birth sits between citizenship and email --
+        # see POLICY_STEPS. Unchanged ("citizenship") for any country that
+        # doesn't require it.
+        return "date_of_birth" if requires_date_of_birth(draft_country_code(draft)) else "citizenship"
     return {
         "plate": "method",
         "vin": "plate",
         "chassis": "vin",
         "manufacturer": "chassis" if draft.get("identifier_type") == "chassis" else "vin",
         "model": "manufacturer",
+        "model_year": "model",
         "documents": "method",
         "vehicle_review": "documents" if draft.get("data_entry_method") == "documents" else "model",
         "checkout_review": "documents",
@@ -318,17 +345,26 @@ def back_step(draft: dict, step: str, rt: str) -> str:
         "full_name": "checkout_review" if draft.get("data_entry_method") == "documents" else "vehicle_review",
         "passport": "full_name",
         "citizenship": "passport",
-        "email": "citizenship",
+        "date_of_birth": "citizenship",
         "phone": "email",
     }.get(step, "resume")
 
 
-def next_vehicle_step(step: str, rt: str) -> str:
+def next_vehicle_step(step: str, rt: str, draft: dict) -> str:
     if step == "manufacturer":
         return "model"  # a model must always be (re)chosen for a new manufacturer
+    if step == "model" and requires_model_year(draft_country_code(draft)) and not draft.get("model_year"):
+        # Turkey only, and only when not already known (e.g. from OCR) --
+        # the SAME "always wins over rt" precedence as manufacturer->model
+        # above, so editing just the model still asks for the year if it's
+        # still missing.
+        return "model_year"
     if rt:
         return rt
-    return {"plate": "vin", "vin": "manufacturer", "chassis": "manufacturer", "model": "vehicle_review"}[step]
+    return {
+        "plate": "vin", "vin": "manufacturer", "chassis": "manufacturer", "model": "vehicle_review",
+        "model_year": "vehicle_review",
+    }[step]
 
 
 def next_policy_step(step: str, rt: str, draft: dict | None = None) -> str:
@@ -395,16 +431,19 @@ def reset_checkout(ctx: Ctx, *, floor_message_id: int | None = None, order_id: i
 
 
 def category_label(ctx: Ctx, code: str) -> str:
-    if code in texts.CATEGORY_LABELS:
-        return texts.CATEGORY_LABELS[code]
-    category = catalog_repo.get_category_by_code(ctx.conn, code)
-    return category.name if category else code
+    return categories.category_label(ctx.conn, ctx.profile, code)
 
 
 def offered_categories(ctx: Ctx) -> list[tuple[str, str]]:
-    codes = [c.code for c in checkout_service.list_offered_categories(ctx.conn, ctx.settings, ctx.profile.country_code)]
-    order = list(texts.CATEGORY_LABELS)
-    codes.sort(key=lambda code: order.index(code) if code in order else len(order))
+    codes = categories.offered_category_codes(ctx.conn, ctx.settings, ctx.profile)
+    if ctx.profile.category_codes is None:
+        # Unchanged sort for every bot that doesn't define its own explicit
+        # category list (Georgia today): by the global label dict's key
+        # order. A bot WITH its own explicit list controls its own display
+        # order directly -- re-sorting it against GE's label order would be
+        # meaningless for a product set that dict was never designed for.
+        order = list(texts.CATEGORY_LABELS)
+        codes.sort(key=lambda code: order.index(code) if code in order else len(order))
     return [(code, category_label(ctx, code)) for code in codes]
 
 
@@ -453,6 +492,24 @@ def catalog_fallback_note(ctx: Ctx, draft: dict) -> str | None:
 
 def _fmt(value: date) -> str:
     return texts.format_date(value)
+
+
+_DATE_INPUT_RE = re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$")
+
+
+def parse_start_date_input(text: str) -> date | None:
+    """DD.MM.YYYY (single-digit day/month tolerated) -> date, or None. Used
+    both for the insurance start date (app.telegram_bot.handlers) and the
+    policyholder's date of birth (app.telegram_bot.policyholder) -- the one
+    human-friendly date format this bot asks for anywhere."""
+    match = _DATE_INPUT_RE.match(text or "")
+    if not match:
+        return None
+    day, month, year = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
 
 
 def _nav_row(draft: dict, step: str, rt: str, *, restart: bool = True) -> list:
@@ -533,6 +590,17 @@ def chassis_view(draft: dict, rt: str) -> View:
     rows.append([(texts.BTN_HAVE_VIN, NavCb(to="vin", rt=rt))])
     rows.append(_nav_row(draft, "chassis", rt))
     return View(_with_current(texts.ASK_CHASSIS, current), keyboard(rows), Flow.chassis)
+
+
+def model_year_view(draft: dict, rt: str) -> View:
+    """Turkey only (app.checkout.rules.requires_model_year) -- never reached
+    for a country that doesn't require it (see next_vehicle_step/resolve_step)."""
+    current = draft.get("model_year")
+    rows = []
+    if current:
+        rows.append([(texts.BTN_KEEP.format(value=texts.short(str(current))), KeepCb(step="model_year"))])
+    rows.append(_nav_row(draft, "model_year", rt))
+    return View(_with_current(texts.ASK_MODEL_YEAR, current), keyboard(rows), Flow.model_year)
 
 
 def manufacturer_view(ctx: Ctx, draft: dict, rt: str, query: str | None) -> View:
@@ -648,6 +716,8 @@ def vehicle_review_text(ctx: Ctx, draft: dict) -> str:
         f"Марка: {catalog_line(vehicle_make_display(ctx, draft), manufacturer_name(ctx, draft), draft.get('ocr_manufacturer_hint'))}",
         f"Модель: {catalog_line(vehicle_model_display(ctx, draft), model_name(ctx, draft), draft.get('ocr_model_hint'))}",
     ]
+    if requires_model_year(draft_country_code(draft)):
+        lines.append(f"Год выпуска: {draft.get('model_year') or empty}")
     note = catalog_fallback_note(ctx, draft)
     if note:
         lines += ["", note]
@@ -664,6 +734,10 @@ def vehicle_review_view(ctx: Ctx, draft: dict, rt: str) -> View:
         [(texts.BTN_EDIT_PLATE, NavCb(to="plate", rt=edit))],
         [(texts.BTN_EDIT_VIN, NavCb(to="vin", rt=edit)), (texts.BTN_EDIT_CHASSIS, NavCb(to="chassis", rt=edit))],
         [(texts.BTN_EDIT_MANUFACTURER, NavCb(to="manufacturer", rt=edit)), (texts.BTN_EDIT_MODEL, NavCb(to="model", rt=edit))],
+    ]
+    if requires_model_year(draft_country_code(draft)):
+        rows.append([(texts.BTN_EDIT_MODEL_YEAR, NavCb(to="model_year", rt=edit))])
+    rows += [
         [(texts.BTN_MORE_PHOTOS, NavCb(to="documents", rt=edit))],
         [(texts.BTN_BACK_ARROW, NavCb(to=back_step(draft, "vehicle_review", rt))), (texts.BTN_RESTART, NavCb(to="restart"))],
     ]
@@ -693,6 +767,10 @@ def checkout_review_view(ctx: Ctx, draft: dict) -> View:
         f"Шасси: {identifier if identifier and identifier_type == 'chassis' else dash}",
         f"Марка: {vehicle_make_display(ctx, draft) or dash}",
         f"Модель: {vehicle_model_display(ctx, draft) or dash}",
+    ]
+    if requires_model_year(draft_country_code(draft)):
+        lines.append(f"Год выпуска: {draft.get('model_year') or dash}")
+    lines += [
         "",
         "📅 Страховка",
         f"Категория: {category_label(ctx, draft['vehicle_category_code'])}",
@@ -710,6 +788,9 @@ def checkout_review_view(ctx: Ctx, draft: dict) -> View:
         f"Паспорт: {draft.get('identification_number') or dash}",
         f"Гражданство: {texts.citizenship_label(draft.get('citizenship')) or dash}",
     ]
+    if requires_date_of_birth(draft_country_code(draft)):
+        dob = draft.get("date_of_birth")
+        lines.append(f"Дата рождения: {_fmt(date.fromisoformat(dob)) if dob else dash}")
     lines += _contact_lines(ctx, draft, dash)
     note = catalog_fallback_note(ctx, draft)
     if note:
@@ -741,12 +822,19 @@ def checkout_review_view(ctx: Ctx, draft: dict) -> View:
         ]
     else:
         confirm_rows = [[(texts.BTN_CONFIRM, FinalCb(action="confirm"))]]
+    country_code = draft_country_code(draft)
+    vehicle_rows = [[(texts.BTN_R_MANUFACTURER, NavCb(to="manufacturer", rt=rt)), (texts.BTN_R_MODEL, NavCb(to="model", rt=rt))]]
+    if requires_model_year(country_code):
+        vehicle_rows.append([(texts.BTN_R_MODEL_YEAR, NavCb(to="model_year", rt=rt))])
+    policyholder_rows = [[(texts.BTN_R_CITIZENSHIP, NavCb(to="citizenship", rt=rt)), (texts.BTN_R_START, NavCb(to="date", rt=rt))]]
+    if requires_date_of_birth(country_code):
+        policyholder_rows.append([(texts.BTN_R_DATE_OF_BIRTH, NavCb(to="date_of_birth", rt=rt))])
     rows = [
         *confirm_rows,
         [(texts.BTN_R_PLATE, NavCb(to="plate", rt=rt)), (texts.BTN_R_VIN, NavCb(to="vin", rt=rt))],
-        [(texts.BTN_R_MANUFACTURER, NavCb(to="manufacturer", rt=rt)), (texts.BTN_R_MODEL, NavCb(to="model", rt=rt))],
+        *vehicle_rows,
         [(texts.BTN_R_FULL_NAME, NavCb(to="full_name", rt=rt)), (texts.BTN_R_PASSPORT, NavCb(to="passport", rt=rt))],
-        [(texts.BTN_R_CITIZENSHIP, NavCb(to="citizenship", rt=rt)), (texts.BTN_R_START, NavCb(to="date", rt=rt))],
+        *policyholder_rows,
         [(texts.BTN_R_PERIOD, NavCb(to="periods", rt=rt))],
         contact_edits,
         [(texts.BTN_REUPLOAD, NavCb(to="documents", rt=rt))],
@@ -794,6 +882,7 @@ _POLICY_PROMPTS = {
     "full_name": texts.ASK_FULL_NAME,
     "passport": texts.ASK_PASSPORT,
     "citizenship": texts.ASK_CITIZENSHIP,
+    "date_of_birth": texts.ASK_DATE_OF_BIRTH,
     "email": texts.ASK_EMAIL,
     "phone": texts.ASK_PHONE,
 }
@@ -801,6 +890,11 @@ _POLICY_SUGGESTION_KEYS = {
     "full_name": "ocr_policyholder_full_name",
     "passport": "ocr_identification_number",
     "citizenship": "ocr_citizenship",
+    # Policyholder-document field, same hint-then-confirm pattern as the
+    # three above -- NEVER auto-applied, see app.checkout.service.
+    # ocr_draft_update's own docstring on why date_of_birth follows this
+    # (not the vehicle-document "write directly" pattern model_year uses).
+    "date_of_birth": "ocr_date_of_birth",
 }
 
 
@@ -822,6 +916,8 @@ def keep_label(step: str, value) -> str:
 
 def policy_view(draft: dict, step: str, rt: str) -> View:
     current = draft.get(POLICY_STEP_FIELD[step])
+    if step == "date_of_birth" and current:
+        current = _fmt(date.fromisoformat(current))  # stored as ISO; shown DD.MM.YYYY like every other date here
     shown = texts.citizenship_label(current) if step == "citizenship" else current
     text = _with_current(_POLICY_PROMPTS[step], shown)
     if step == "phone":
@@ -834,7 +930,12 @@ def policy_view(draft: dict, step: str, rt: str) -> View:
     rows = []
     suggestion = policy_suggestion(draft, step)
     if suggestion:
-        shown_suggestion = texts.citizenship_label(suggestion) if step == "citizenship" else suggestion
+        if step == "citizenship":
+            shown_suggestion = texts.citizenship_label(suggestion)
+        elif step == "date_of_birth":
+            shown_suggestion = _fmt(date.fromisoformat(suggestion))
+        else:
+            shown_suggestion = suggestion
         rows.append([(texts.BTN_SUGGEST.format(value=texts.short(shown_suggestion)), SuggestCb(step=step))])
     if current:
         rows.append([(keep_label(step, current), KeepCb(step=step))])
@@ -926,6 +1027,8 @@ async def build_view(ctx: Ctx, draft: dict, step: str, *, rt: str = "", page: in
         return manufacturer_view(ctx, draft, rt, query)
     if step == "model":
         return await model_view(ctx, draft, rt, page, query)
+    if step == "model_year":
+        return model_year_view(draft, rt)
     if step == "checkout_review":
         return checkout_review_view(ctx, draft)
     if step == "periods":

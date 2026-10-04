@@ -19,6 +19,13 @@ class BotProfile:
     # TelegramBotProfileConfig) -- None means "ask the customer".
     customer_email: str | None = None
     customer_phone: str | None = None
+    # Optional per-bot category availability/label override -- see
+    # app.telegram_bot.categories (the only reader of these two fields) and
+    # TelegramBotProfileConfig's own docstring for the exact semantics. None
+    # means "unchanged, country-level behavior" (every bot before this
+    # field existed, Georgia today).
+    category_codes: tuple[str, ...] | None = None
+    category_labels: dict[str, str] | None = None
 
     def fixed_contacts(self) -> dict:
         """Draft/order fields (insurance_orders column names) this bot fills
@@ -36,4 +43,6 @@ class BotProfile:
             username=config.username,
             customer_email=config.customer_email,
             customer_phone=config.customer_phone,
+            category_codes=tuple(config.category_codes) if config.category_codes else None,
+            category_labels=dict(config.category_labels) if config.category_labels else None,
         )

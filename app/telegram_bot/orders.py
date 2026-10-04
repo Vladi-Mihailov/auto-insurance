@@ -14,6 +14,7 @@ point the draft at the order).
 import logging
 import sqlite3
 import uuid
+from datetime import date
 
 from aiogram import F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -96,6 +97,9 @@ def create_order_record(ctx: Ctx, draft: dict, checkout_id: str, *, operator: bo
                 "full_name": draft["full_name"],
                 "identification_number": draft["identification_number"],
                 "citizenship": draft["citizenship"],
+                # TR-only (app.checkout.rules.requires_date_of_birth); absent/None
+                # for GE, same as every other optional create_order() field.
+                "date_of_birth": date.fromisoformat(draft["date_of_birth"]) if draft.get("date_of_birth") else None,
                 # the bot's fixed contacts when configured, else the customer's own
                 "contact_email": ctx.profile.customer_email or draft["contact_email"],
                 "contact_phone": ctx.profile.customer_phone or draft["contact_phone"],

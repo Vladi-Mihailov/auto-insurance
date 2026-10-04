@@ -26,6 +26,7 @@ from app.telegram_bot.steps import (
     go,
     keep_label,
     next_policy_step,
+    parse_start_date_input,
     policy_suggestion,
 )
 
@@ -69,6 +70,15 @@ async def on_citizenship_text(message: Message, state: FSMContext, ctx: Ctx):
         await go(message, state, ctx, "citizenship", rt=await _rt(state), notice=texts.CITIZENSHIP_NOT_FOUND)
         return
     await _accept(message, state, ctx, "citizenship", canonical)
+
+
+async def on_date_of_birth_text(message: Message, state: FSMContext, ctx: Ctx):
+    parsed = parse_start_date_input(message.text or "")
+    if parsed is None:
+        notice = texts.STEP_INVALID.format(error="Не удалось распознать дату. Введите её в формате ДД.ММ.ГГГГ")
+        await go(message, state, ctx, "date_of_birth", rt=await _rt(state), notice=notice)
+        return
+    await _accept(message, state, ctx, "date_of_birth", parsed.isoformat())
 
 
 async def on_email_text(message: Message, state: FSMContext, ctx: Ctx):
@@ -127,6 +137,7 @@ def register(router: Router) -> None:
     router.message.register(on_full_name_text, Flow.full_name, F.text)
     router.message.register(on_passport_text, Flow.passport, F.text)
     router.message.register(on_citizenship_text, Flow.citizenship, F.text)
+    router.message.register(on_date_of_birth_text, Flow.date_of_birth, F.text)
     router.message.register(on_email_text, Flow.email, F.text)
     router.message.register(on_phone_contact, Flow.phone, F.contact)
     router.message.register(on_phone_text, Flow.phone, F.text)

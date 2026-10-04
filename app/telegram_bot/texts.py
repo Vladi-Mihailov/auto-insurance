@@ -96,6 +96,7 @@ BTN_EDIT_VIN = "✏️ Изменить VIN"
 BTN_EDIT_CHASSIS = "✏️ Изменить шасси"
 BTN_EDIT_MANUFACTURER = "✏️ Изменить марку"
 BTN_EDIT_MODEL = "✏️ Изменить модель"
+BTN_EDIT_MODEL_YEAR = "✏️ Изменить год выпуска"
 BTN_MORE_PHOTOS = "📷 Загрузить ещё фото"
 BTN_DOCS_DONE = "✅ Все документы загружены ({count})"
 BTN_ENTER_MANUALLY = "✍️ Ввести вручную"
@@ -127,6 +128,7 @@ ASK_MODEL = "🚘 Модель {manufacturer}\n\nВыберите модель �
 ASK_MODEL_FILTERED = "🚘 Модель {manufacturer}\n\nМодели по запросу «{query}». Выберите модель или введите другой запрос:"
 MODEL_NOT_FOUND = "🚘 Модель {manufacturer}\n\nПо запросу «{query}» моделей не найдено. Введите другой запрос или выберите «Other»."
 MODELS_UNAVAILABLE = "Не удалось загрузить список моделей. Попробуйте ещё раз чуть позже."
+ASK_MODEL_YEAR = "📅 Год выпуска автомобиля\n\nВведите год выпуска, например 2015."
 OCR_HINT = "Распознано в документе: «{value}» — в каталоге не найдено, выберите вручную."
 CURRENT_VALUE = "Сейчас: {value}"
 
@@ -177,6 +179,7 @@ ASK_FULL_NAME = "👤 ФИО страхователя\n\nВведите фами
 ASK_PASSPORT = "🛂 Номер паспорта\n\nВведите номер загранпаспорта (или паспорта) страхователя."
 ASK_CITIZENSHIP = "🌍 Гражданство\n\nВыберите из списка или напишите страну (например Russia):"
 CITIZENSHIP_NOT_FOUND = "Не удалось определить страну. Напишите её название по-английски (например Russia, Kazakhstan) или выберите из списка."
+ASK_DATE_OF_BIRTH = "🎂 Дата рождения страхователя\n\nВведите дату рождения в формате ДД.ММ.ГГГГ, например 05.03.1990."
 ASK_EMAIL = "✉️ Email\n\nВведите email — на него придёт полис."
 ASK_PHONE = "📱 Телефон\n\nНажмите «📱 Отправить мой номер» или введите номер вручную в международном формате, например +79001234567."
 PHONE_NOT_OWN = "Пожалуйста, отправьте свой собственный номер кнопкой «📱 Отправить мой номер» или введите его вручную."
@@ -335,9 +338,11 @@ BTN_R_PLATE = "✏️ Госномер"
 BTN_R_VIN = "✏️ VIN"
 BTN_R_MANUFACTURER = "✏️ Марка"
 BTN_R_MODEL = "✏️ Модель"
+BTN_R_MODEL_YEAR = "✏️ Год выпуска"
 BTN_R_FULL_NAME = "✏️ ФИО"
 BTN_R_PASSPORT = "✏️ Паспорт"
 BTN_R_CITIZENSHIP = "✏️ Гражданство"
+BTN_R_DATE_OF_BIRTH = "✏️ Дата рождения"
 BTN_R_START = "✏️ Дата начала"
 BTN_R_PERIOD = "✏️ Период"
 BTN_REUPLOAD = "📷 Загрузить документы заново"
@@ -433,6 +438,14 @@ STAFF_NEW_MANAGER_NOTICE = "✅ Новый менеджер: {label}"
 
 BTN_STAFF_PRICES = "💰 Цены"
 PRICES_TITLE = "💰 Цены ОСАГО Грузия"
+# Per-country title for a bot NOT profiled for GE -- GE itself keeps the
+# exact literal PRICES_TITLE above, untouched (see prices_title() below).
+# "ОСАГО Турции" matches the naming already used for TR on the web side
+# (app/web/templates/summary.html's own country-title map).
+_PRICES_TITLE_BY_COUNTRY = {
+    "TR": "💰 Цены ОСАГО Турции",
+    "AM": "💰 Цены ОСАГО Армении",
+}
 BTN_PRICES_CANCEL_INPUT = "❌ Отмена"
 BTN_PRICES_CONFIRM = "✅ Изменить"
 BTN_PRICES_RESET = "↩️ Вернуть базовую цену"
@@ -445,9 +458,15 @@ PRICES_INPUT_EXPIRED = "⏱ Время на ввод цены истекло —
 PRICES_STALE = "⚠️ Цена уже была изменена другим менеджером.\nОбновите список цен и попробуйте ещё раз."
 
 
-def prices_matrix_text(sections: list[tuple[str, list[str]]]) -> str:
+def prices_title(country_code: str) -> str:
+    """GE (and anything else unlisted) keeps the exact original PRICES_TITLE
+    literal -- never altered by this function."""
+    return _PRICES_TITLE_BY_COUNTRY.get(country_code, PRICES_TITLE)
+
+
+def prices_matrix_text(sections: list[tuple[str, list[str]]], *, title: str = PRICES_TITLE) -> str:
     """sections: [(category_label, [price_line, ...]), ...], in display order."""
-    blocks = [PRICES_TITLE]
+    blocks = [title]
     for category_label, lines in sections:
         blocks.append("")
         blocks.append(category_label)
