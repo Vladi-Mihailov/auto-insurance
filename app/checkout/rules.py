@@ -95,6 +95,17 @@ def requires_date_of_birth(country_code: str) -> bool:
     return country_code == "TR"
 
 
+def auto_assigns_start_date(country_code: str) -> bool:
+    """True -- this country's coverage begins at issuance, not a
+    customer-chosen date: the bot (never the web checkout, which is
+    untouched by this) must compute start_date itself (today_in_georgia(),
+    the same canonical "now" every other date decision in this app uses)
+    and never show the "📅 Когда начать?" step at all. False (every other
+    country, including GE) keeps the existing customer-chooses-a-date flow
+    byte-for-byte unchanged."""
+    return country_code == "TR"
+
+
 def duration_range_for(settings, country_code: str, category_code: str) -> DurationRange | None:
     """None means (country, category) is a FIXED-period product (GE/TR
     today) -- non-None means EXACT DATE RANGE (AM's passenger_car) where the

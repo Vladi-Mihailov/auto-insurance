@@ -360,20 +360,25 @@ telegram_bots:
   # an earlier placeholder name used before the bot was actually created).
   # bot_key stays osago24rt regardless -- it's an internal identifier only,
   # decoupled from the Telegram username by design (see module docstring
-  # above). No customer_email/customer_phone: no Turkey-specific fixed
-  # contact exists yet, so this bot asks its own customers directly, same
-  # as osago24ge would if those two were omitted.
+  # above).
   osago24rt:
     country_code: TR
     username: OSAGOTRbot
     intro_title: "🇹🇷 ОСАГО Турции"
     intro_text: "Оформите страховку автомобиля для поездки в Турцию онлайн."
+    # Same fixed contacts as osago24ge above (same tplgee@mail.ru/phone
+    # digits, just written without GE's spaces -- see task "FIX DEFAULT
+    # CUSTOMER CONTACTS FOR TR") -- this bot's customers are never asked
+    # for email/phone either.
+    customer_email: tplgee@mail.ru
+    customer_phone: "+995574220625"
     # This bot's OWN product set -- independent of
     # catalog.enabled_category_codes_by_country.TR (the website's TR list,
     # unaffected by this) -- see app.telegram_bot.categories. "bus" here is
     # the SAME catalog code Georgia's "🚌 Автобус" uses, relabeled below for
     # this bot only; see pricing.TR.bus's own comment for why this does not
-    # touch the website's documented bus/trailer exclusion for TR.
-    category_codes: [motorcycle, passenger_car, bus]
+    # touch the website's documented bus/trailer exclusion for TR. Order
+    # fixed per task "CHANGE TR CATEGORY ORDER" -- passenger_car first.
+    category_codes: [passenger_car, motorcycle, bus]
     category_labels:
       bus: "🚛 Truck / Camper"

@@ -25,7 +25,12 @@ import dataclasses
 import pytest
 from aiogram.methods import AnswerCallbackQuery, SendDocument
 
-from app.checkout.rules import allowed_category_codes, requires_date_of_birth, requires_model_year
+from app.checkout.rules import (
+    allowed_category_codes,
+    auto_assigns_start_date,
+    requires_date_of_birth,
+    requires_model_year,
+)
 from app.countries import COUNTRIES
 from app.dates.rules import today_in_georgia
 from app.db import get_connection
@@ -51,6 +56,10 @@ VIN = "WVWZZZ1JZXW000001"
 # doesn't implement (same requirement as test_telegram_bot_staff.py's own
 # PROFILE constant).
 GE_PROFILE = dataclasses.replace(TEST_PROFILE, username="OsagoGeTestBot")
+# Matches the real production config.yaml telegram_bots.osago24rt block --
+# category order and fixed contacts both per task "FIX DEFAULT CUSTOMER
+# CONTACTS FOR TR"/"CHANGE TR CATEGORY ORDER".
+TR_EMAIL, TR_PHONE = "tplgee@mail.ru", "+995574220625"
 TR_PROFILE = dataclasses.replace(
     TEST_PROFILE,
     bot_key="osago24rt",
@@ -58,7 +67,9 @@ TR_PROFILE = dataclasses.replace(
     username="OsagoTrTestBot",
     intro_title="🇹🇷 ОСАГО Турции",
     intro_text="Оформите страховку автомобиля для поездки в Турцию онлайн.",
-    category_codes=("motorcycle", "passenger_car", "bus"),
+    customer_email=TR_EMAIL,
+    customer_phone=TR_PHONE,
+    category_codes=("passenger_car", "motorcycle", "bus"),
     category_labels={"bus": "🚛 Truck / Camper"},
 )
 
@@ -128,19 +139,26 @@ def _place_order(
 ):
     """A real order through the actual checkout conversation (manual entry,
     not OCR) -- works identically regardless of which bot profile h runs,
-    since nothing in the flow itself is country-hardcoded. Neither GE_PROFILE
-    nor TR_PROFILE here sets fixed customer_email/customer_phone (TR_PROFILE
-    deliberately matches the real osago24rt config, which has none -- see
-    final report), so both ask for email/phone; a profile that DOES set
-    them (like real production osago24ge) would simply skip those two steps.
+    since nothing in the flow itself is country-hardcoded.
 
     model_year/date_of_birth are only ever asked for TR (requires_model_year/
-    requires_date_of_birth) -- GE's steps list is unaffected, byte for byte."""
+    requires_date_of_birth) -- GE's steps list is unaffected, byte for byte.
+    The start-date step ("d:tomorrow") is skipped entirely for TR
+    (auto_assigns_start_date -- see task "REMOVE START-DATE STEP COMPLETELY
+    FOR TURKEY"); GE keeps picking it exactly as before. email/phone are
+    only sent for a profile that does NOT set fixed customer_email/
+    customer_phone (GE_PROFILE here; TR_PROFILE matches the real osago24rt
+    config, which does set them -- see task "FIX DEFAULT CUSTOMER CONTACTS
+    FOR TR")."""
     country_code = h.config.profile.country_code
+    fixed = h.config.profile.fixed_contacts()
     steps = [
         lambda: h.send_text(user, "/start"),
         lambda: h.press(user, f"p:{category}:{period}"),
-        lambda: h.press(user, "d:tomorrow"),
+    ]
+    if not auto_assigns_start_date(country_code):
+        steps.append(lambda: h.press(user, "d:tomorrow"))
+    steps += [
         lambda: h.press(user, "e:manual"),
         lambda: h.send_text(user, plate),
         lambda: h.send_text(user, VIN),
@@ -157,10 +175,10 @@ def _place_order(
     ]
     if requires_date_of_birth(country_code):
         steps.append(lambda: h.send_text(user, date_of_birth))
-    steps += [
-        lambda: h.send_text(user, f"client{user.id}@example.com"),
-        lambda: h.send_text(user, "+79991234567"),
-    ]
+    if "contact_email" not in fixed:
+        steps.append(lambda: h.send_text(user, f"client{user.id}@example.com"))
+    if "contact_phone" not in fixed:
+        steps.append(lambda: h.send_text(user, "+79991234567"))
     for step in steps:
         step()
     h.press(user, "fc:confirm")
@@ -174,10 +192,12 @@ def _place_order(
 def _through_model_selection(h, user, ids, *, plate="AB123CD"):
     """Drives the conversation up to (and including) picking the catalog
     model -- the common prefix shared by every model_year test below,
-    regardless of whether the bot profile then asks for model_year."""
+    regardless of whether the bot profile then asks for model_year. The
+    start-date step is skipped entirely for TR (auto_assigns_start_date)."""
     h.send_text(user, "/start")
     h.press(user, "p:passenger_car:30d")
-    h.press(user, "d:tomorrow")
+    if not auto_assigns_start_date(h.config.profile.country_code):
+        h.press(user, "d:tomorrow")
     h.press(user, "e:manual")
     h.send_text(user, plate)
     h.send_text(user, VIN)
@@ -219,8 +239,10 @@ def test_osago24rt_profile_loads(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_MANAGER_IDS", str(OWNER_TR))
     profile = load_bot_config(load_settings(PROJECT_ROOT)).profile
     assert (profile.bot_key, profile.country_code, profile.username) == ("osago24rt", "TR", "OSAGOTRbot")
-    assert profile.category_codes == ("motorcycle", "passenger_car", "bus")
+    assert profile.category_codes == ("passenger_car", "motorcycle", "bus")
     assert profile.category_labels == {"bus": "🚛 Truck / Camper"}
+    assert profile.customer_email == "tplgee@mail.ru"
+    assert profile.customer_phone == "+995574220625"
 
 
 # =========================================================== 2. CATEGORIES
@@ -238,8 +260,8 @@ def test_ge_categories_and_order_unchanged(ge):
 def test_tr_shows_exactly_three_categories_in_order(tr):
     screen = last_screen(tr.press(make_user(20), "m:apply"))
     assert buttons(screen) == [
-        ("🏍 Мотоцикл", "c:motorcycle"),
         ("🚗 Легковой автомобиль", "c:passenger_car"),
+        ("🏍 Мотоцикл", "c:motorcycle"),
         ("🚛 Truck / Camper", "c:bus"),
     ]
 
@@ -417,7 +439,7 @@ def test_prices_screen_shows_only_turkey_categories_and_title(tr):
     assert "ОСАГО Турции" in screen.text
     assert "Грузия" not in screen.text
     category_buttons = [t for t, d in buttons(screen) if d.startswith("pr:cat:")]
-    assert category_buttons == ["🏍 Мотоцикл", "🚗 Легковой автомобиль", "🚛 Truck / Camper"]
+    assert category_buttons == ["🚗 Легковой автомобиль", "🏍 Мотоцикл", "🚛 Truck / Camper"]
 
 
 def test_prices_screen_ge_title_unchanged(ge):
@@ -739,3 +761,105 @@ def test_truck_camper_becomes_purchasable_immediately_after_a_manager_sets_a_pri
 def test_truck_camper_unpriced_state_does_not_affect_ge_bus_which_is_already_priced(ge):
     screen = last_screen(ge.press(make_user(132), "c:bus"))
     assert texts.NO_PERIODS not in screen.text  # GE's "Автобус" is a normal, already-priced category
+
+
+# ============================== 11. TR FIXED CONTACTS (no prompt, defaults)
+
+
+def test_tr_order_persists_the_fixed_default_contacts(tr, ids):
+    order = _place_order(tr, make_user(140), ids)
+    assert order.contact_email == "tplgee@mail.ru"
+    assert order.contact_phone == "+995574220625"
+
+
+def test_tr_customer_is_never_asked_for_email_or_phone(tr, ids):
+    """Reaches the consolidated review without ever seeing ASK_EMAIL/
+    ASK_PHONE -- fixed_contacts() (profile.customer_email/customer_phone)
+    skips both steps entirely, same existing mechanism GE's own fixed-
+    contact bots already use (see tests/test_telegram_bot_fixed_contacts.py)."""
+    user = make_user(141)
+    _through_model_selection(tr, user, ids)
+    tr.send_text(user, "2015")  # model_year
+    tr.press(user, "vc")
+    tr.send_text(user, _name(user.id))
+    tr.send_text(user, "AB1234567")
+    screen = last_screen(tr.press(user, f"cz:{COUNTRIES.index('Russia')}"))
+    # citizenship -> date_of_birth directly (no email/phone in between either)
+    assert texts.ASK_DATE_OF_BIRTH.splitlines()[0] in screen.text
+    review = last_screen(tr.send_text(user, "12.06.1988"))  # -> straight to review, no contact prompts
+    assert texts.ASK_EMAIL.splitlines()[0] not in review.text
+    assert texts.ASK_PHONE.splitlines()[0] not in review.text
+    # _contact_lines() (app.telegram_bot.steps) omits email/phone from the
+    # review text entirely for a fixed-contact bot -- persistence into the
+    # order itself is proven separately by
+    # test_tr_order_persists_the_fixed_default_contacts.
+
+
+def test_ge_contact_behavior_is_unaffected_by_tr_fixed_contacts(ge, ids):
+    """GE_PROFILE here still has no fixed contacts configured -- unchanged."""
+    order = _place_order(ge, make_user(142), ids)
+    assert order.contact_email == f"client{142}@example.com"
+    assert order.contact_phone == "+79991234567"
+
+
+# ========================== 12. TR START-DATE AUTO-ASSIGNMENT (no prompt)
+
+
+def test_tr_never_shows_the_start_date_question(tr, ids):
+    user = make_user(150)
+    tr.send_text(user, "/start")
+    screen = last_screen(tr.press(user, "p:passenger_car:30d"))
+    assert texts.DATE_PROMPT not in screen.text
+    assert not [d for _, d in buttons(screen) if d.startswith("d:")]
+    # landed straight on the manual/documents method screen instead
+    assert screen.text != texts.DATE_PROMPT
+
+
+def test_ge_still_shows_the_start_date_question_unchanged(ge, ids):
+    user = make_user(151)
+    ge.send_text(user, "/start")
+    screen = last_screen(ge.press(user, "p:passenger_car:30d"))
+    assert screen.text == texts.DATE_PROMPT
+    assert ("Сегодня", "d:today") in buttons(screen)
+    assert ("Завтра", "d:tomorrow") in buttons(screen)
+
+
+def test_tr_order_gets_todays_start_date_automatically(tr, ids):
+    from app.dates.rules import today_in_georgia
+
+    order = _place_order(tr, make_user(152), ids)
+    assert order.start_date == today_in_georgia()
+
+
+def test_tr_consolidated_review_has_no_start_date_edit_control(tr, ids):
+    user = make_user(153)
+    _through_model_selection(tr, user, ids)
+    tr.send_text(user, "2016")
+    tr.press(user, "vc")
+    tr.send_text(user, _name(user.id))
+    tr.send_text(user, "AB1234567")
+    tr.press(user, f"cz:{COUNTRIES.index('Russia')}")
+    review = last_screen(tr.send_text(user, "12.06.1988"))
+    assert texts.BTN_R_START not in dict(buttons(review))
+    # the citizenship edit button is still there, just alone in its row
+    assert texts.BTN_R_CITIZENSHIP in dict(buttons(review))
+
+
+def test_ge_consolidated_review_still_has_the_start_date_edit_control(ge, ids):
+    order = _place_order(ge, make_user(154), ids)
+    assert order is not None  # sanity: GE's flow (incl. its date step) still completes
+    user = make_user(155)
+    ge.press(user, "p:passenger_car:30d")
+    ge.press(user, "d:tomorrow")
+    ge.press(user, "e:manual")
+    ge.send_text(user, "AB123CD")
+    ge.send_text(user, VIN)
+    ge.press(user, f"mf:{ids['TOYOTA']}")
+    ge.press(user, f"md:{ids['TOYOTA/CAMRY']}")
+    ge.press(user, "vc")
+    ge.send_text(user, _name(user.id))
+    ge.send_text(user, "AB1234567")
+    ge.press(user, f"cz:{COUNTRIES.index('Russia')}")
+    ge.send_text(user, f"client{user.id}@example.com")
+    review = last_screen(ge.send_text(user, "+79991234567"))
+    assert texts.BTN_R_START in dict(buttons(review))

@@ -35,6 +35,7 @@ from app.catalog import repository as catalog_repo
 from app.catalog.sync import sync_models_on_demand
 from app.checkout import service as checkout_service
 from app.checkout.rules import (
+    auto_assigns_start_date,
     category_period_step_completed,
     draft_country_code,
     duration_range_for,
@@ -242,12 +243,29 @@ def policyholder_complete(draft: dict) -> bool:
     return not checkout_service.policyholder_missing_fields(draft)
 
 
+def _refresh_auto_start_date_if_stale(ctx: Ctx, draft: dict) -> dict:
+    """TR only (see auto_assigns_start_date): if the auto-assigned start
+    date has gone stale (the customer resumed a day or more later), it is
+    silently reapplied to today -- the ONLY other writer of this field for
+    TR is app.telegram_bot.handlers.on_period's own identical call, never a
+    date picker. A no-op (returns draft unchanged) for every other country,
+    or when the date is still valid."""
+    if start_date_valid(draft) or not auto_assigns_start_date(draft_country_code(draft)):
+        return draft
+    checkout_service.set_fixed_period_start_date(
+        ctx.conn, ctx.settings, session_id=ctx.session_id,
+        start_date=today_in_georgia(), today=today_in_georgia(),
+    )
+    return ctx.draft()
+
+
 def resume_step(ctx: Ctx, draft: dict) -> str:
     """The step the customer belongs on, from what the draft holds."""
     if draft.get("order_id"):
         return "order"
     if not selection_complete(ctx, draft):
         return "categories"
+    draft = _refresh_auto_start_date_if_stale(ctx, draft)
     if not start_date_valid(draft):
         return "date"
     if not vehicle_confirmed(ctx, draft):
@@ -301,8 +319,15 @@ def resolve_step(ctx: Ctx, draft: dict, step: str, rt: str = "") -> str:
         return step
     if not selection_complete(ctx, draft):
         return "categories"
+    if step == "date" and auto_assigns_start_date(draft_country_code(draft)):
+        # Never a real screen for this country (see app.telegram_bot.
+        # handlers.on_period) -- a forged/stale NavCb(to="date") resolves
+        # forward instead of showing it, same as fixed_policy_steps() does
+        # for a field this bot fills itself.
+        return rt or resume_step(ctx, _refresh_auto_start_date_if_stale(ctx, draft))
     if step in ("date", "periods"):
         return step
+    draft = _refresh_auto_start_date_if_stale(ctx, draft)
     if not start_date_valid(draft):
         return "date"
     if step == "model" and not draft.get("manufacturer_id"):
@@ -826,7 +851,12 @@ def checkout_review_view(ctx: Ctx, draft: dict) -> View:
     vehicle_rows = [[(texts.BTN_R_MANUFACTURER, NavCb(to="manufacturer", rt=rt)), (texts.BTN_R_MODEL, NavCb(to="model", rt=rt))]]
     if requires_model_year(country_code):
         vehicle_rows.append([(texts.BTN_R_MODEL_YEAR, NavCb(to="model_year", rt=rt))])
-    policyholder_rows = [[(texts.BTN_R_CITIZENSHIP, NavCb(to="citizenship", rt=rt)), (texts.BTN_R_START, NavCb(to="date", rt=rt))]]
+    if auto_assigns_start_date(country_code):
+        # TR: coverage starts at issuance, never a customer choice -- no
+        # edit control for it at all (see app.telegram_bot.handlers.on_period).
+        policyholder_rows = [[(texts.BTN_R_CITIZENSHIP, NavCb(to="citizenship", rt=rt))]]
+    else:
+        policyholder_rows = [[(texts.BTN_R_CITIZENSHIP, NavCb(to="citizenship", rt=rt)), (texts.BTN_R_START, NavCb(to="date", rt=rt))]]
     if requires_date_of_birth(country_code):
         policyholder_rows.append([(texts.BTN_R_DATE_OF_BIRTH, NavCb(to="date_of_birth", rt=rt))])
     rows = [

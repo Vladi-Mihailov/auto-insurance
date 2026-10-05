@@ -22,6 +22,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 from app.checkout import service as checkout_service
+from app.checkout.rules import auto_assigns_start_date, draft_country_code
 from app.dates.rules import today_in_georgia
 from app.telegram_bot import documents, operator_issue, order_views, orders, policyholder, staff, texts, vehicle
 from app.telegram_bot.context import Ctx
@@ -203,8 +204,19 @@ async def on_period(callback: CallbackQuery, callback_data: PeriodCb, state: FSM
         await _show_view(callback, periods_view(ctx, callback_data.category))
         await callback.answer(selection.error, show_alert=True)
         return
-    if rt and start_date_valid(ctx.draft()):
+    draft = ctx.draft()
+    if rt and start_date_valid(draft):
         await go(callback, state, ctx, rt)  # period changed; the end date was recomputed for the same start
+    elif auto_assigns_start_date(draft_country_code(draft)):
+        # TR: coverage begins at issuance -- never ask, just compute it the
+        # same way "Сегодня" already does (see _apply_start_date) and move
+        # straight on, exactly as if the customer had picked "today".
+        error = _apply_start_date(ctx, today_in_georgia())
+        if error:
+            logger.error("TR auto start-date assignment rejected today's date: %s", error)
+            await go(callback, state, ctx, "date", rt=rt)
+        else:
+            await go(callback, state, ctx, rt or _step_after_date(ctx))
     else:
         await go(callback, state, ctx, "date", rt=rt)
     await callback.answer()
