@@ -1,166 +1,170 @@
-"""Admin retail-price editor (/admin/prices).
+"""Admin retail-price editor (/admin/prices?country=GE|TR).
 
-DB overrides on top of config/config.yaml (see app.pricing.overrides),
-read by app.pricing.provider for the web checkout AND the Telegram bot
-alike -- there is exactly one effective price per (country, category,
-period). Existing orders are never touched: each order keeps the
+A thin UI over app.pricing.admin -- the SAME service the Telegram bot's
+"💰 Цены" uses, so both surfaces share one set of rules (stale protection,
+"saving the base removes the override", history). Prices are DB overrides on
+top of config/config.yaml; config.yaml itself is never written from here.
+Every checkout (website, every bot) reads the effective price through
+app.pricing.provider, so a change applies to new calculations at once, with
+no restart. Existing orders are never touched: each order keeps the
 price_customer_minor it was created with.
 
-Same protection as every other /admin/* route: router-wide require_admin
-(HTTP Basic, fails closed when admin credentials aren't configured).
+One form per cell: each Save/Reset carries the value the manager saw, and a
+cell changed by someone else in the meantime is refused with 409 instead of
+being silently overwritten.
+
+Protection: router-wide require_admin (HTTP Basic, fails closed when admin
+credentials aren't configured), plus require_same_origin_post on every POST.
 """
 
-import logging
 import sqlite3
-from urllib.parse import urlsplit
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from app.checkout import service as checkout_service
-from app.deps import current_admin_username, get_db, get_settings, require_admin
-from app.pricing import overrides as price_overrides
+from app.deps import current_admin_username, get_db, get_settings, require_admin, require_same_origin_post
+from app.pricing import admin as price_admin
 from app.pricing.overrides import parse_price
-from app.pricing.provider import available_periods, config_periods
 from app.web.templating import render
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
-# The only product with editable retail prices today; AM derives its own
-# linear pricing from config (duration_ranges.AM) and TR from TL tariffs.
-PRICES_COUNTRY_CODE = "GE"
+# Countries whose prices are fixed-period config tariffs (editable here).
+# AM is priced by a linear duration formula (duration_ranges.AM) -- nothing
+# to override.
+PRICE_COUNTRIES = {"GE": "🇬🇪 Грузия", "TR": "🇹🇷 Турция"}
+DEFAULT_COUNTRY = "GE"
+
+CHANNEL_LABELS = {price_admin.CHANNEL_WEB: "сайт", price_admin.CHANNEL_BOT: "бот"}
 
 
-def _same_origin_or_absent(request: Request) -> bool:
-    """Browsers replay Basic-auth credentials on cross-site POSTs, so a
-    price change whose Origin header names another site is rejected. An
-    absent Origin (non-browser clients) is allowed, like the other admin
-    forms."""
-    origin = request.headers.get("origin")
-    if not origin:
-        return True
-    return urlsplit(origin).netloc == request.url.netloc
+def _country_or_404(country: str | None) -> str:
+    code = (country or DEFAULT_COUNTRY).upper()
+    if code not in PRICE_COUNTRIES:
+        raise HTTPException(status_code=404, detail="Unknown country")
+    return code
 
 
-def price_matrix(conn: sqlite3.Connection, settings) -> tuple[list[dict], list[dict]]:
-    """(columns, rows) for the price table. Categories come from the
-    canonical catalog (the same list the checkout offers), periods and
-    default prices from config.yaml -- nothing enumerated here by hand."""
-    categories = checkout_service.list_offered_categories(conn, settings, PRICES_COUNTRY_CODE)
-    overrides = {
-        (o.vehicle_category_code, o.period_code): o for o in price_overrides.list_overrides(conn, PRICES_COUNTRY_CODE)
-    }
-    columns: dict[str, str] = {}
-    rows = []
-    for category in categories:
-        effective = {p.code: p for p in available_periods(settings, PRICES_COUNTRY_CODE, category.code)}
-        cells = {}
-        for default in config_periods(settings, PRICES_COUNTRY_CODE, category.code):
-            columns.setdefault(default.code, default.label)
-            cells[default.code] = {
-                "field": f"price__{category.code}__{default.code}",
-                "default_rub": default.price_rub,
-                "effective_rub": effective[default.code].price_rub,
-                "override": overrides.get((category.code, default.code)),
-            }
-        rows.append({"category": category, "cells": cells})
-    return [{"code": code, "label": label} for code, label in columns.items()], rows
+def _format_updated_at(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value).strftime("%d.%m.%Y %H:%M UTC")
+    except ValueError:
+        return value
 
 
-def _render(request: Request, conn, settings, *, errors=None, submitted=None, saved=None, status_code=200):
-    columns, rows = price_matrix(conn, settings)
+def _parse_expected(raw: str) -> int | None:
+    """The hidden expected_* value the page rendered: blank = not priced /
+    no override. Anything else non-numeric can only be a tampered form."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit():
+        raise HTTPException(status_code=400, detail="Malformed expected value")
+    return int(raw)
+
+
+def _cell_key(category_code: str, period_code: str) -> str:
+    return f"{category_code}:{period_code}"
+
+
+def _render(
+    request: Request,
+    conn: sqlite3.Connection,
+    country: str,
+    *,
+    errors: dict | None = None,
+    submitted: dict | None = None,
+    saved_key: str | None = None,
+    stale_key: str | None = None,
+    alert: str | None = None,
+    status_code: int = 200,
+):
+    """saved_key / stale_key: "<category>:<period>" of the cell just saved /
+    refused as stale -- the template shows its CURRENT value from the
+    matrix, read fresh for this response."""
+    matrix = price_admin.price_matrix(conn, get_settings(), country)
+    cells = {_cell_key(row.category_code, code): (row, cell) for row in matrix.rows for code, cell in row.cells.items()}
     return render(
         request,
         "admin_prices.html",
         {
-            "columns": columns,
-            "rows": rows,
+            "country": country,
+            "countries": PRICE_COUNTRIES,
+            "matrix": matrix,
+            "channel_labels": CHANNEL_LABELS,
             "errors": errors or {},
             "submitted": submitted or {},
-            "saved": saved,
+            "saved": cells.get(saved_key) if saved_key else None,
+            "stale": cells.get(stale_key) if stale_key else None,
+            "stale_key": stale_key,
+            "alert": alert,
+            "format_updated_at": _format_updated_at,
         },
         status_code=status_code,
     )
 
 
 @router.get("/prices")
-def get_admin_prices(request: Request, conn: sqlite3.Connection = Depends(get_db)):
-    saved = request.query_params.get("saved")
-    return _render(request, conn, get_settings(), saved=int(saved) if saved and saved.isdigit() else None)
+def get_admin_prices(request: Request, country: str | None = None, conn: sqlite3.Connection = Depends(get_db)):
+    return _render(request, conn, _country_or_404(country), saved_key=request.query_params.get("saved"))
 
 
-@router.post("/prices")
-async def post_admin_prices(
+@router.post("/prices/set", dependencies=[Depends(require_same_origin_post)])
+def post_admin_price_set(
     request: Request,
+    country: str = Form(...),
+    category_code: str = Form(...),
+    period_code: str = Form(...),
+    expected_rub: str = Form(""),
+    price: str = Form(""),
     conn: sqlite3.Connection = Depends(get_db),
     admin_username: str = Depends(current_admin_username),
 ):
-    """All-or-nothing: every submitted cell is validated first, and any
-    invalid value means nothing is saved. Only cells whose value actually
-    changed are written. Only known (category, period) cells are ever read
-    -- an unknown form field can't create a new product or period."""
-    if not _same_origin_or_absent(request):
-        raise HTTPException(status_code=403, detail="Cross-origin request rejected")
-    settings = get_settings()
-    form = await request.form()
-    _, rows = price_matrix(conn, settings)
-
-    errors: dict[str, str] = {}
-    submitted: dict[str, str] = {}
-    changes = []
-    for row in rows:
-        for period_code, cell in row["cells"].items():
-            if cell["field"] not in form:
-                continue
-            raw = str(form[cell["field"]])
-            submitted[cell["field"]] = raw
-            price, error = parse_price(raw)
-            if error:
-                errors[cell["field"]] = error
-            elif price != cell["effective_rub"]:
-                changes.append((row["category"].code, period_code, cell["effective_rub"], price))
-
-    if errors:
-        return _render(request, conn, settings, errors=errors, submitted=submitted, status_code=422)
-
-    for category_code, period_code, _old, new_price in changes:
-        price_overrides.upsert_override(
-            conn,
-            country_code=PRICES_COUNTRY_CODE,
-            vehicle_category_code=category_code,
-            period_code=period_code,
-            price_rub=new_price,
-            updated_by=admin_username,
+    code = _country_or_404(country)
+    key = _cell_key(category_code, period_code)
+    expected = _parse_expected(expected_rub)
+    new_price, error = parse_price(price)
+    if error:
+        return _render(
+            request, conn, code, errors={key: error}, submitted={key: price},
+            alert="Цена не сохранена — исправьте отмеченное поле.", status_code=422,
         )
-    conn.commit()
-    for category_code, period_code, old_price, new_price in changes:
-        logger.info(
-            "Retail price changed: %s/%s/%s %s -> %s RUB by admin %r",
-            PRICES_COUNTRY_CODE, category_code, period_code, old_price, new_price, admin_username,
+    try:
+        price_admin.set_price(
+            conn, get_settings(), country_code=code, category_code=category_code, period_code=period_code,
+            expected_rub=expected, new_rub=new_price, actor=admin_username, source=price_admin.SOURCE_WEB,
         )
-    return RedirectResponse(f"/admin/prices?saved={len(changes)}", status_code=303)
+    except price_admin.UnknownCell:
+        return _render(request, conn, code, alert="Неизвестная категория или период — ничего не сохранено.", status_code=422)
+    except price_admin.StalePrice:
+        return _render(request, conn, code, submitted={key: price}, stale_key=key, status_code=409)
+    return RedirectResponse(f"/admin/prices?country={code}&saved={key}", status_code=303)
 
 
-@router.post("/prices/reset")
+@router.post("/prices/reset", dependencies=[Depends(require_same_origin_post)])
 def post_admin_price_reset(
     request: Request,
+    country: str = Form(...),
     category_code: str = Form(...),
     period_code: str = Form(...),
+    expected_override_rub: str = Form(""),
     conn: sqlite3.Connection = Depends(get_db),
     admin_username: str = Depends(current_admin_username),
 ):
     """Remove one override -- that cell goes back to the config.yaml price."""
-    if not _same_origin_or_absent(request):
-        raise HTTPException(status_code=403, detail="Cross-origin request rejected")
-    removed = price_overrides.delete_override(
-        conn, country_code=PRICES_COUNTRY_CODE, vehicle_category_code=category_code, period_code=period_code
-    )
-    conn.commit()
-    if removed:
-        logger.info(
-            "Retail price override removed: %s/%s/%s by admin %r (config default applies)",
-            PRICES_COUNTRY_CODE, category_code, period_code, admin_username,
+    code = _country_or_404(country)
+    key = _cell_key(category_code, period_code)
+    expected = _parse_expected(expected_override_rub)
+    try:
+        price_admin.reset_price(
+            conn, get_settings(), country_code=code, category_code=category_code, period_code=period_code,
+            expected_override_rub=expected, actor=admin_username, source=price_admin.SOURCE_WEB,
         )
-    return RedirectResponse("/admin/prices", status_code=303)
+    except price_admin.UnknownCell:
+        return _render(request, conn, code, alert="Неизвестная категория или период — ничего не изменено.", status_code=422)
+    except price_admin.StalePrice:
+        return _render(request, conn, code, stale_key=key, status_code=409)
+    return RedirectResponse(f"/admin/prices?country={code}&saved={key}", status_code=303)

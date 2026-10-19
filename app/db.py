@@ -168,6 +168,31 @@ CREATE TABLE IF NOT EXISTS insurance_price_overrides (
     UNIQUE (country_code, vehicle_category_code, period_code)
 );
 
+-- Append-only history of every price change made through
+-- app.pricing.admin (the one writer -- /admin/prices AND the Telegram
+-- bot's "💰 Цены"). insurance_price_overrides only keeps the latest value;
+-- this keeps what it was before. old/new_price_rub are the EFFECTIVE price
+-- before/after (NULL = not priced, i.e. not purchasable). action: 'set' (a
+-- new price, including one equal to the config base, which removes the
+-- override) or 'reset' (override removed, config base applies). source:
+-- 'web' or 'telegram'; actor is the Basic-auth username or
+-- "telegram manager <id>".
+CREATE TABLE IF NOT EXISTS insurance_price_override_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    country_code TEXT NOT NULL,
+    vehicle_category_code TEXT NOT NULL,
+    period_code TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('set', 'reset')),
+    old_price_rub INTEGER,
+    new_price_rub INTEGER,
+    actor TEXT,
+    source TEXT NOT NULL CHECK (source IN ('web', 'telegram')),
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_override_history_cell
+    ON insurance_price_override_history (country_code, vehicle_category_code, period_code, id);
+
 -- One row per (order, manager, purpose): the Bot API message a manager was
 -- sent for an order (purpose 'order_card' = the actionable order card), so
 -- every manager's card can be edited when the order's state changes, and a

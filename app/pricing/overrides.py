@@ -1,5 +1,7 @@
 """Raw-SQL repository for insurance_price_overrides (see app.db for the
-table's contract). Writers: /admin/prices only. Reader: app.pricing.provider."""
+table's contract). Writer: app.pricing.admin (used by /admin/prices and the
+Telegram bot's "💰 Цены") -- never call upsert/delete from a UI directly.
+Reader: app.pricing.provider."""
 
 import sqlite3
 from dataclasses import dataclass

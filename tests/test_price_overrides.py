@@ -129,85 +129,148 @@ def test_repository_rejects_out_of_range_price(bad_price):
 # ------------------------------------------------------------------ admin
 
 
+_SAME_ORIGIN = {"Origin": "http://testserver"}
+
+
+def _set(admin, *, price, expected="2500", category="passenger_car", period="30d", country="GE", headers=_SAME_ORIGIN):
+    return admin.post(
+        "/admin/prices/set",
+        data={"country": country, "category_code": category, "period_code": period, "expected_rub": expected, "price": price},
+        auth=_AUTH,
+        headers=headers,
+        follow_redirects=False,
+    )
+
+
+def _reset(admin, *, expected, category="passenger_car", period="30d", headers=_SAME_ORIGIN):
+    return admin.post(
+        "/admin/prices/reset",
+        data={"country": "GE", "category_code": category, "period_code": period, "expected_override_rub": expected},
+        auth=_AUTH,
+        headers=headers,
+        follow_redirects=False,
+    )
+
+
 def test_admin_prices_requires_admin_auth(admin):
     assert admin.get("/admin/prices").status_code == 401
-    assert admin.post("/admin/prices", data={"price__passenger_car__30d": "1"}).status_code == 401
+    assert admin.get("/admin/prices?country=TR").status_code == 401
+    form = {"country": "GE", "category_code": "passenger_car", "period_code": "30d", "expected_rub": "2500", "price": "1"}
+    assert admin.post("/admin/prices/set", data=form, headers=_SAME_ORIGIN).status_code == 401
+    assert admin.post("/admin/prices/reset", data=form, headers=_SAME_ORIGIN).status_code == 401
     assert _overrides() == {}
 
 
 def test_admin_prices_page_shows_the_catalog_and_config_matrix(admin):
     response = admin.get("/admin/prices", auth=_AUTH)
     assert response.status_code == 200
-    assert "Цены — Грузия" in response.text
+    assert "Цены — 🇬🇪 Грузия" in response.text
+    assert 'href="/admin/prices?country=GE"' in response.text and 'href="/admin/prices?country=TR"' in response.text
     assert "Легковой" in response.text
     for label in ("15 дней", "30 дней", "90 дней"):
         assert label in response.text
-    assert 'name="price__passenger_car__30d"' in response.text
-    assert 'value="2500"' in response.text
+    assert 'id="cell-passenger_car-30d"' in response.text
+    assert 'name="expected_rub" value="2500"' in response.text
+    assert "БАЗА" in response.text
+    assert 'name="expected_override_rub"' not in response.text  # no override -> no reset offered
+
+
+def test_unknown_country_is_404(admin):
+    assert admin.get("/admin/prices?country=XX", auth=_AUTH).status_code == 404
+
+
+def test_old_bulk_post_is_gone(admin):
+    response = admin.post("/admin/prices", data={"price__passenger_car__30d": "1"}, auth=_AUTH, headers=_SAME_ORIGIN)
+    assert response.status_code == 405
+    assert _overrides() == {}
 
 
 def test_admin_changes_price_and_it_is_used_immediately(admin, caplog):
     with caplog.at_level(logging.INFO):
-        response = admin.post(
-            "/admin/prices",
-            data={"price__passenger_car__15d": "1500", "price__passenger_car__30d": "2 650", "price__passenger_car__90d": "4500"},
-            auth=_AUTH,
-            follow_redirects=False,
-        )
+        response = _set(admin, price="2 650")
     assert response.status_code == 303
-    assert response.headers["location"] == "/admin/prices?saved=1"
+    assert response.headers["location"] == "/admin/prices?country=GE&saved=passenger_car:30d"
     overrides = _overrides()
-    assert list(overrides) == [("passenger_car", "30d")]  # unchanged cells are not written
+    assert list(overrides) == [("passenger_car", "30d")]
     assert overrides[("passenger_car", "30d")].price_rub == 2650
     assert overrides[("passenger_car", "30d")].updated_by == "admin"
-    assert "Retail price changed: GE/passenger_car/30d 2500 -> 2650 RUB by admin 'admin'" in caplog.text
+    assert "Retail price changed: GE/passenger_car/30d 2500 -> 2650 RUB by web 'admin'" in caplog.text
     assert "s3cret-test-only" not in caplog.text
 
-    page = admin.get("/admin/prices", auth=_AUTH)
-    assert 'value="2650"' in page.text
-    assert "изменено (admin)" in page.text
+    page = admin.get(response.headers["location"], auth=_AUTH)
+    assert "✅ Сохранено" in page.text
+    assert 'name="expected_rub" value="2650"' in page.text
+    assert 'name="expected_override_rub" value="2650"' in page.text  # reset offered
+    assert "изменил: admin" in page.text
+    assert "база: 2 500 ₽" in page.text
     # the web checkout sees it at once -- no restart, no cache
     checkout = TestClient(app).get("/category-period")
     assert "2 650" in checkout.text
 
 
-@pytest.mark.parametrize("bad", ["abc", "0", "-5", "12.5", "", "10000001", "1e3"])
+@pytest.mark.parametrize("bad", ["abc", "0", "-5", "12.5", "", "1000001", "1e3"])
 def test_invalid_price_is_rejected_and_nothing_is_saved(admin, bad):
-    response = admin.post(
-        "/admin/prices",
-        data={"price__passenger_car__15d": "1700", "price__passenger_car__30d": bad},
-        auth=_AUTH,
-    )
+    response = _set(admin, price=bad)
     assert response.status_code == 422
-    assert "Цены не сохранены" in response.text
-    assert _overrides() == {}  # all-or-nothing: the valid 15d change wasn't saved either
-
-
-def test_unknown_fields_cannot_create_prices(admin):
-    admin.post(
-        "/admin/prices",
-        data={"price__spaceship__30d": "5", "price__passenger_car__7d": "5", "price__passenger_car__30d": "2500"},
-        auth=_AUTH,
-    )
+    assert "Цена не сохранена" in response.text
     assert _overrides() == {}
 
 
-def test_cross_origin_price_change_is_rejected(admin):
-    response = admin.post(
-        "/admin/prices",
-        data={"price__passenger_car__30d": "1"},
-        auth=_AUTH,
-        headers={"Origin": "https://evil.example"},
-    )
-    assert response.status_code == 403
+@pytest.mark.parametrize("category,period", [("spaceship", "30d"), ("passenger_car", "7d")])
+def test_unknown_category_or_period_cannot_create_prices(admin, category, period):
+    response = _set(admin, price="5", category=category, period=period)
+    assert response.status_code == 422
     assert _overrides() == {}
+
+
+def test_saving_one_cell_never_touches_another(admin):
+    assert _set(admin, price="2600").status_code == 303
+    assert list(_overrides()) == [("passenger_car", "30d")]
+    prices = {p.code: p.price_rub for p in available_periods(get_settings(), "GE", "passenger_car")}
+    assert prices == {"15d": 1500, "30d": 2600, "90d": 4500, "1y": 9000}
+
+
+def test_saving_the_base_price_removes_the_override(admin):
+    _set_override(price=2600)
+    assert _set(admin, price="2500", expected="2600").status_code == 303
+    assert _overrides() == {}
+
+
+def test_stale_set_is_refused_with_409_and_shows_the_current_value(admin):
+    _set_override(price=2700, by="other manager")  # changed after the page was loaded at 2500
+    response = _set(admin, price="2600", expected="2500")
+    assert response.status_code == 409
+    assert "уже изменена другим менеджером" in response.text
+    assert "2 700 ₽" in response.text
+    assert _overrides()[("passenger_car", "30d")].price_rub == 2700
+
+
+def test_stale_reset_is_refused(admin):
+    _set_override(price=2700)
+    response = _reset(admin, expected="2600")
+    assert response.status_code == 409
+    assert _overrides()[("passenger_car", "30d")].price_rub == 2700
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"Origin": "https://evil.example"}, {"Referer": "https://evil.example/x"}, {}],
+    ids=["foreign-origin", "foreign-referer", "neither"],
+)
+def test_cross_origin_or_unproven_origin_post_is_rejected(admin, headers):
+    assert _set(admin, price="2600", headers=headers).status_code == 403
+    _set_override(price=2600)
+    assert _reset(admin, expected="2600", headers=headers).status_code == 403
+    assert _overrides()[("passenger_car", "30d")].price_rub == 2600
+
+
+def test_same_origin_referer_alone_is_accepted(admin):
+    assert _set(admin, price="2600", headers={"Referer": "http://testserver/admin/prices"}).status_code == 303
 
 
 def test_reset_returns_cell_to_config_default(admin):
     _set_override(price=2600)
-    response = admin.post(
-        "/admin/prices/reset", data={"category_code": "passenger_car", "period_code": "30d"}, auth=_AUTH, follow_redirects=False
-    )
+    response = _reset(admin, expected="2600")
     assert response.status_code == 303
     assert _overrides() == {}
     assert get_period(get_settings(), "GE", "passenger_car", "30d").price_rub == 2500

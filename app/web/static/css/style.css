@@ -1489,3 +1489,20 @@ a.country-card:hover .country-card__arrow {
 .price-table input[type="text"] { width: 7em; padding: 6px 8px; font-size: 16px; }
 .price-table__hint { display: block; font-size: 12px; color: #6b7280; margin-top: 4px; }
 .price-reset { margin: 6px 0; }
+.price-admin { max-width: none; }
+.price-tabs { display: flex; gap: 8px; margin: 12px 0 16px; flex-wrap: wrap; }
+.price-tabs__tab { padding: 8px 14px; border: 1px solid #d1d5db; border-radius: 999px; text-decoration: none; color: inherit; }
+.price-tabs__tab--active { background: #111827; border-color: #111827; color: #fff; }
+.price-notice { padding: 10px 12px; background: #ecfdf5; border-radius: 8px; }
+.price-alert { padding: 10px 12px; background: #fef2f2; border-radius: 8px; }
+.price-table td.price-cell { min-width: 11em; }
+.price-cell__value { font-weight: 600; margin-bottom: 6px; }
+.price-cell__form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.price-cell__form .btn { padding: 6px 10px; }
+.price-cell--unpriced .price-cell__value { color: #b45309; font-weight: 500; }
+.price-cell--attention { background: #fffbeb; }
+.price-cell--absent { color: #9ca3af; }
+.price-badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; vertical-align: middle; }
+.price-badge--base { background: #f3f4f6; color: #374151; }
+.price-badge--override { background: #dbeafe; color: #1d4ed8; }
+.price-chip { display: inline-block; font-size: 11px; padding: 1px 6px; margin-left: 4px; border-radius: 999px; background: #f3f4f6; }

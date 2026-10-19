@@ -4,6 +4,7 @@ import secrets
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -100,6 +101,22 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(_admin_basic_auth)
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Basic"},
         )
+
+
+def require_same_origin_post(request: Request) -> None:
+    """CSRF guard for state-changing admin POSTs. Browsers replay Basic-auth
+    credentials on cross-site requests, so the request must PROVE it came
+    from this site: its Origin header -- or, when a browser omits Origin,
+    its Referer -- must name this host. A POST carrying neither is refused
+    too (fails closed). Only the host is compared (scheme can differ behind
+    the TLS-terminating proxy)."""
+    for header in ("origin", "referer"):
+        value = request.headers.get(header)
+        if value:
+            if urlsplit(value).netloc == request.url.netloc:
+                return
+            raise HTTPException(status_code=403, detail="Cross-origin request rejected")
+    raise HTTPException(status_code=403, detail="Missing Origin/Referer")
 
 
 def current_admin_username(credentials: HTTPBasicCredentials = Depends(_admin_basic_auth)) -> str:

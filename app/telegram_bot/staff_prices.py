@@ -1,10 +1,12 @@
 """💰 Цены -- global retail price management inside the SAME bot customers use.
 
-Reuses the canonical pricing stack directly (app.pricing.overrides /
-app.pricing.provider) -- there is exactly one effective price per (country,
-category, period), shared with the website checkout and this bot's own
-checkout (app.checkout.service). No Telegram-only price storage exists or
-should ever exist here.
+Every read and write goes through app.pricing.admin -- the SAME service the
+website's /admin/prices uses, so stale protection, "saving the base price
+removes the override" and the price-change history are one implementation,
+not two. There is exactly one effective price per (country, category,
+period), shared with the website checkout and this bot's own checkout
+(app.checkout.service). No Telegram-only price storage exists or should
+ever exist here.
 
 Country-scoped by the CALLING BOT's own profile.country_code -- a bot
 profiled for one country edits that country's overrides, and never sees or
@@ -18,10 +20,6 @@ Category availability/labels shown are this bot's own (see
 app.telegram_bot.categories) -- NOT the country-level website list -- so a
 bot's own product set (e.g. a relabeled category under a different product
 name) is exactly what 💰 Цены offers, never more.
-
-The website's own /admin/prices (app.web.admin_prices_routes) is unrelated
-and unaffected by any of this -- it remains hardcoded to GE only (its own
-PRICES_COUNTRY_CODE constant), by design, out of this module's scope.
 
 Authorization: both 'owner' and 'manager' may view AND edit (see
 app.telegram_bot.staff.role_of) -- price editing is explicitly NOT
@@ -45,11 +43,12 @@ anyway), and a bot restart must not lose or misattribute the intent.
 
 Multi-manager safety: the confirmation screen for a newly typed price
 carries BOTH the price shown as "Было" and the new typed value in its own
-callback payload (PricesCb.o / .n). on_prices (action="confirm") re-reads
-the CURRENT effective price at the moment "✅ Изменить" is pressed and
-refuses to write if it no longer matches "Было" -- see texts.PRICES_STALE.
-Reset-to-default (action="reset") is protected the same way, comparing
-against the current override's price rather than the config default.
+callback payload (PricesCb.o / .n), passed to app.pricing.admin.set_price
+as the expected value: if the cell no longer matches "Было" when
+"✅ Изменить" is pressed, nothing is written -- see texts.PRICES_STALE.
+Reset-to-default (action="reset") is protected the same way via
+reset_price, comparing against the current override's price rather than
+the config default.
 """
 
 import logging
@@ -61,7 +60,7 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from app.pricing import overrides as price_overrides
+from app.pricing import admin as price_admin
 from app.pricing.overrides import parse_price
 from app.pricing.provider import PeriodOption, available_periods, config_periods, get_period
 from app.settings import Settings
@@ -147,15 +146,6 @@ def _default_price(settings: Settings, country_code: str, category_code: str, pe
     )
 
 
-def _override(
-    conn: sqlite3.Connection, country_code: str, category_code: str, period_code: str
-) -> price_overrides.PriceOverride | None:
-    overrides = {
-        (o.vehicle_category_code, o.period_code): o for o in price_overrides.list_overrides(conn, country_code)
-    }
-    return overrides.get((category_code, period_code))
-
-
 # ------------------------------------------------------------------ markup
 
 
@@ -231,7 +221,8 @@ def period_prompt_screen(
     period: PeriodOption | None = get_period(settings, cc, category_code, period_code)
     current_rub = period.price_rub if period else None
     rows = []
-    if _override(conn, cc, category_code, period_code) is not None:
+    cell = price_admin.get_cell(conn, settings, cc, category_code, period_code)
+    if cell is not None and cell.has_override:
         rows.append([(texts.BTN_PRICES_RESET, PricesCb(a="reset_ask", c=category_code, p=period_code))])
     rows.append([(texts.BTN_PRICES_CANCEL_INPUT, PricesCb(a="cancel", c=category_code, p=period_code))])
     rows.append([(texts.BTN_STAFF_BACK, PricesCb(a="cat", c=category_code))])
@@ -243,17 +234,16 @@ def reset_confirm_screen(
 ) -> tuple[str, list] | None:
     """None -- nothing to reset (no override exists for this cell)."""
     cc = profile.country_code
-    existing = _override(conn, cc, category_code, period_code)
-    if existing is None:
+    cell = price_admin.get_cell(conn, settings, cc, category_code, period_code)
+    if cell is None or not cell.has_override:
         return None
-    default_rub = _default_price(settings, cc, category_code, period_code)
     text = texts.prices_reset_confirm(
         category_label=categories.category_label(conn, profile, category_code),
-        period_label=_period_label(settings, cc, category_code, period_code),
-        current_rub=existing.price_rub, default_rub=default_rub,
+        period_label=cell.period_label,
+        current_rub=cell.override_rub, default_rub=cell.base_rub,
     )
     rows = [
-        [(texts.BTN_PRICES_RESET_CONFIRM, PricesCb(a="reset", c=category_code, p=period_code, o=existing.price_rub))],
+        [(texts.BTN_PRICES_RESET_CONFIRM, PricesCb(a="reset", c=category_code, p=period_code, o=cell.override_rub))],
         [(texts.BTN_PRICES_CANCEL_INPUT, PricesCb(a="period", c=category_code, p=period_code))],
     ]
     return text, rows
@@ -262,42 +252,40 @@ def reset_confirm_screen(
 # ----------------------------------------------------------------- actions
 
 
+def _actor(callback: CallbackQuery) -> str:
+    # Same "telegram manager <id>" shape as app.telegram_bot.managers'
+    # payment confirm/reject actor -- one audit convention for every
+    # manager-attributed write in this bot, never the (unverified, often
+    # absent) Telegram username.
+    return f"telegram manager {callback.from_user.id}"
+
+
 async def _confirm(
     callback: CallbackQuery, callback_data: PricesCb, conn: sqlite3.Connection, settings: Settings, profile: BotProfile
 ) -> None:
     cc = profile.country_code
     category_code, period_code, new_price = callback_data.c, callback_data.p, callback_data.n
     shown_old = callback_data.o or None  # 0 is the "was not priced yet" sentinel -- real prices are always > 0
-    current = get_period(settings, cc, category_code, period_code)
-    if current is None:
+    try:
+        price_admin.set_price(
+            conn, settings, country_code=cc, category_code=category_code, period_code=period_code,
+            expected_rub=shown_old, new_rub=new_price, actor=_actor(callback), source=price_admin.SOURCE_TELEGRAM,
+        )
+    except (price_admin.UnknownCell, ValueError):
         await callback.answer(texts.PRICES_CATEGORY_UNKNOWN, show_alert=True)
         await _show(callback, *menu_screen(conn, settings, profile))
         return
-    if current.price_rub != shown_old:
+    except price_admin.StalePrice:
         # Another manager changed this cell between the confirmation screen
         # being shown and "✅ Изменить" being pressed -- never overwrite blindly.
         await callback.answer(texts.PRICES_STALE, show_alert=True)
         await _show(callback, *category_screen(conn, settings, profile, category_code))
         return
 
-    # Same "telegram manager <id>" shape as app.telegram_bot.managers'
-    # payment confirm/reject actor -- one audit convention for every
-    # manager-attributed write in this bot, never the (unverified, often
-    # absent) Telegram username.
-    updated_by = f"telegram manager {callback.from_user.id}"
-    price_overrides.upsert_override(
-        conn, country_code=cc, vehicle_category_code=category_code,
-        period_code=period_code, price_rub=new_price, updated_by=updated_by,
-    )
-    conn.commit()
-    logger.info(
-        "Retail price changed: %s/%s/%s %s -> %s RUB by telegram manager %s (bot_key=%s)",
-        cc, category_code, period_code, current.price_rub, new_price, callback.from_user.id, profile.bot_key,
-    )
     notice = texts.prices_changed(
         category_label=categories.category_label(conn, profile, category_code),
         period_label=_period_label(settings, cc, category_code, period_code),
-        old_rub=current.price_rub, new_rub=new_price,
+        old_rub=shown_old, new_rub=new_price,
     )
     await callback.answer()
     await _show(callback, *category_screen(conn, settings, profile, category_code, notice=notice))
@@ -309,22 +297,20 @@ async def _reset(
     cc = profile.country_code
     category_code, period_code = callback_data.c, callback_data.p
     shown_old = callback_data.o or None
-    existing = _override(conn, cc, category_code, period_code)
-    existing_price = existing.price_rub if existing else None
-    if existing_price != shown_old:
+    try:
+        price_admin.reset_price(
+            conn, settings, country_code=cc, category_code=category_code, period_code=period_code,
+            expected_override_rub=shown_old, actor=_actor(callback), source=price_admin.SOURCE_TELEGRAM,
+        )
+    except price_admin.UnknownCell:
+        await callback.answer(texts.PRICES_CATEGORY_UNKNOWN, show_alert=True)
+        await _show(callback, *menu_screen(conn, settings, profile))
+        return
+    except price_admin.StalePrice:
         await callback.answer(texts.PRICES_STALE, show_alert=True)
         await _show(callback, *category_screen(conn, settings, profile, category_code))
         return
 
-    if existing is not None:
-        price_overrides.delete_override(
-            conn, country_code=cc, vehicle_category_code=category_code, period_code=period_code
-        )
-        conn.commit()
-        logger.info(
-            "Retail price override removed: %s/%s/%s by telegram manager %s (config default applies, bot_key=%s)",
-            cc, category_code, period_code, callback.from_user.id, profile.bot_key,
-        )
     notice = texts.prices_reset_done(
         category_label=categories.category_label(conn, profile, category_code),
         period_label=_period_label(settings, cc, category_code, period_code),
