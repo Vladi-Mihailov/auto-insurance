@@ -44,6 +44,7 @@ from app.notifications.telegram import notify_operator_new_order
 from app.ocr.image import MAX_FILES_PER_RECOGNITION, UploadValidationError, validate_and_normalize_upload
 from app.ocr.parser import build_candidates
 from app.ocr.provider import OcrProvider, OcrProviderError
+from app.orders import web_documents
 from app.orders.models import Order
 from app.orders.repository import set_dates, update_coverage, update_policyholder, update_vehicle_fields
 from app.pricing.provider import available_periods, get_period, resolve_duration_price
@@ -529,6 +530,7 @@ def post_documents_upload(
     # rejected_before_any_ocr_call): one bad photo in the batch means none of
     # them are sent anywhere, never a silent partial submit.
     normalized_images: list[bytes] = []
+    originals: list[tuple[bytes, str, str | None]] = []
     for index, upload in enumerate(uploaded, start=1):
         raw_bytes = upload.file.read()
         try:
@@ -543,6 +545,20 @@ def post_documents_upload(
                 _documents_upload_context(draft, ocr_provider=ocr_provider, error=message),
                 status_code=422,
             )
+        originals.append((raw_bytes, upload.content_type, upload.filename))
+
+    # Every photo passed validation: keep the ORIGINALS (private storage,
+    # app.orders.web_documents) so they can reach the staff with the order.
+    # Removed again below if this batch isn't recognized -- only a batch
+    # that produced the draft's data stays attached to it.
+    settings = get_settings()
+    web_documents.cleanup_storage(conn, settings)
+    saved = [
+        web_documents.save_upload(settings, data, mime_type=mime, original_filename=name) for data, mime, name in originals
+    ]
+
+    def discard_saved():
+        web_documents.delete_stored(settings, [meta["stored_name"] for meta in saved])
 
     # ONE OCR call carrying every photo in this batch (see
     # app.ocr.provider.OcrProvider.recognize) -- never one call per photo.
@@ -556,6 +572,7 @@ def post_documents_upload(
     try:
         ocr_result = ocr_provider.recognize(images)
     except OcrProviderError as exc:
+        discard_saved()
         # Log the provider/duration/safe error classification only -- never
         # str(exc)/exc.classification's underlying message/body, which could
         # echo back document content a provider included in an error
@@ -587,6 +604,7 @@ def post_documents_upload(
     duration_ms = int((time.monotonic() - started_at) * 1000)
 
     if ocr_result.fields_found_count == 0:
+        discard_saved()
         log_event(
             conn,
             session_id=session_id,
@@ -627,6 +645,7 @@ def post_documents_upload(
     # Draft mapping shared with the Telegram bot -- see
     # app.checkout.service.ocr_draft_update for the per-key rules.
     merge_draft(conn, session_id, checkout_service.ocr_draft_update(ocr_result, candidates))
+    web_documents.replace_draft_documents(conn, settings, session_id, saved)
     return _redirect("/vehicle")
 
 
@@ -1140,6 +1159,10 @@ def post_policyholder(
     except checkout_service.OrderFromDraftError as exc:
         return _redirect("/vehicle" if exc.reason == "catalog" else "/category-period")
     log_event(conn, session_id=session_id, order_id=order.id, event_name="policyholder_provided")
+    # The uploaded document photos become the order's files and the staff
+    # notification is queued (delivered by the country's bot) -- BEFORE the
+    # draft that references them is cleared. Never raises.
+    web_documents.attach_and_notify(conn, get_settings(), order, draft)
     # The draft has now been fully consumed into a real order — clear it so
     # a resubmitted POST (browser back + resubmit, double form submission)
     # fails the pre-order guard above instead of creating a duplicate order.

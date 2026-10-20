@@ -201,18 +201,25 @@ def current_review_round(conn: sqlite3.Connection, order_id: int) -> int | None:
 APPLICATION_ROUND = "app"
 
 
-def enqueue_application(conn: sqlite3.Connection, order: Order, *, manager_ids, file_row_ids: list[int]) -> list[int]:
+def enqueue_application(
+    conn: sqlite3.Connection, order: Order, *, manager_ids, file_row_ids: list[int], bot_key: str | None = None
+) -> list[int]:
     """Per manager, when the customer submits the application: the order
     card, then each document the customer attached for issuance (each its
     own job, exactly like enqueue_review_request -- a failed document is
     retried alone, never re-sending the card or the documents that already
-    went through). Idempotent per (order, manager, file)."""
+    went through). Idempotent per (order, manager, file).
+
+    bot_key: the bot that delivers -- the order's own bot by default; a
+    WEBSITE order has none and passes its country's bot (see
+    app.orders.web_documents.delivery_bot_key)."""
+    bot_key = bot_key or order.bot_key
     job_ids = []
     for manager_id in sorted(manager_ids):
         job_ids.append(
             enqueue(
                 conn,
-                bot_key=order.bot_key,
+                bot_key=bot_key,
                 dedupe_key=f"card:{order.id}:{APPLICATION_ROUND}:{manager_id}",
                 kind=KIND_MANAGER_CARD,
                 order_id=order.id,
@@ -221,7 +228,9 @@ def enqueue_application(conn: sqlite3.Connection, order: Order, *, manager_ids, 
             )
         )
         job_ids.extend(
-            enqueue_manager_file(conn, order, review_round=APPLICATION_ROUND, manager_id=manager_id, file_row_id=file_row_id)
+            enqueue_manager_file(
+                conn, order, review_round=APPLICATION_ROUND, manager_id=manager_id, file_row_id=file_row_id, bot_key=bot_key
+            )
             for file_row_id in file_row_ids
         )
     return [job_id for job_id in job_ids if job_id]
@@ -268,10 +277,13 @@ def enqueue_review_request(
     return [job_id for job_id in job_ids if job_id]
 
 
-def enqueue_manager_file(conn: sqlite3.Connection, order: Order, *, review_round, manager_id: int, file_row_id: int, extra: bool = False):
+def enqueue_manager_file(
+    conn: sqlite3.Connection, order: Order, *, review_round, manager_id: int, file_row_id: int, extra: bool = False,
+    bot_key: str | None = None,
+):
     return enqueue(
         conn,
-        bot_key=order.bot_key,
+        bot_key=bot_key or order.bot_key,
         # Same key whether it was queued with the card or later as an extra
         # receipt -- so it can never be delivered twice.
         dedupe_key=f"file:{order.id}:{review_round}:{file_row_id}:{manager_id}",

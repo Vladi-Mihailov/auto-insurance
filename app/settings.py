@@ -133,6 +133,21 @@ class AppSettings(BaseModel):
     db_file: Path
     cookie_secure: bool = False
     secret_key: str = ""
+    # Private storage for website-uploaded document photos (see
+    # app.orders.web_documents). Defaults to a directory next to the DB --
+    # never under app/web/static, never served by any route.
+    web_uploads_dir: Path | None = None
+    # An upload no order ever claimed (abandoned checkout) is deleted after
+    # this many hours.
+    web_upload_orphan_hours: int = 48
+    # None = keep order documents (same as Telegram-received files, which
+    # are never deleted); N = delete a web order's stored document bytes
+    # N days after the order was created.
+    web_document_retention_days: int | None = None
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.web_uploads_dir or Path(self.db_file).parent / "web_uploads"
 
 
 class ContactSettings(BaseModel):
@@ -396,6 +411,9 @@ def load_settings(project_root: Path) -> Settings:
             db_file=db_file,
             cookie_secure=_parse_bool(os.getenv("COOKIE_SECURE")),
             secret_key=os.getenv("APP_SECRET_KEY", ""),
+            web_uploads_dir=project_root / os.environ["INSURANCE_WEB_UPLOADS_DIR"] if os.getenv("INSURANCE_WEB_UPLOADS_DIR") else None,
+            web_upload_orphan_hours=int(os.getenv("WEB_UPLOAD_ORPHAN_HOURS") or 48),
+            web_document_retention_days=int(os.environ["WEB_DOCUMENT_RETENTION_DAYS"]) if os.getenv("WEB_DOCUMENT_RETENTION_DAYS") else None,
         ),
         pricing=PricingSettings(
             periods_by_country_category=periods_by_country_category,

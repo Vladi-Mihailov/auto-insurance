@@ -395,3 +395,59 @@ def test_manager_reject_then_resubmission(h, settings, ids):
     assert "rcpt-2" in [p.photo for p in sent_to(calls, MANAGER, SendPhoto)]
     assert len(_receipts(settings, order.id)) == 2
     assert _order_count(settings) == 1
+
+
+# ------------------------------------- OCR application -> every staff member
+
+# The production staff shape: one owner, one invited manager.
+OWNER_ID, SECOND_MANAGER = 5712994689, 410811386
+
+
+def test_ocr_application_delivers_all_three_documents_to_owner_and_manager_once(settings, ids):
+    """Regression for the live report: a NEW bot application created from 3
+    uploaded photos queues the card + all 3 documents to every active staff
+    member of this bot, each its own job; a restart re-sends nothing and
+    the receipt review doesn't repeat them."""
+    from app.notifications import bot_outbox
+    from telegram_bot_helpers import make_outbox_due
+
+    h = BotHarness(settings, profile=FIXED, manager_ids={SECOND_MANAGER}, owner_id=OWNER_ID, ocr_provider=Provider())
+    try:
+        user = make_user(70, "client")
+        _ocr_review(h, user)
+        order, calls = _confirmed(h, settings, user)
+        assert _customer_screens(calls, user)[-1].text.startswith(f"💳 Оплата заказа {order.public_number}")
+        conn = get_connection(settings.app.db_file)
+        try:
+            documents = order_files.list_files(conn, order.id, order_files.KIND_VEHICLE_DOCUMENT)
+            jobs = bot_outbox.list_jobs(conn, order.id)
+        finally:
+            conn.close()
+        assert len(documents) == 3
+        for staff_id in (OWNER_ID, SECOND_MANAGER):
+            mine = [j for j in jobs if j.target_chat_id == staff_id]
+            assert [j.kind for j in mine] == [bot_outbox.KIND_MANAGER_CARD] + [bot_outbox.KIND_MANAGER_FILE] * 3
+            assert sorted(j.payload.get("file_row_id") for j in mine[1:]) == sorted(d.id for d in documents)
+            assert all(j.status == "sent" for j in mine)
+            (card,) = sent_to(calls, staff_id, SendMessage)
+            assert card.text.startswith(f"📝 Новая заявка {order.public_number}")
+            photos = sent_to(calls, staff_id, SendPhoto)
+            assert [p.photo for p in photos] == [d.telegram_file_id for d in documents]
+            assert [p.caption.splitlines()[1] for p in photos] == [f"Документ клиента {n} из 3 (техпаспорт / паспорт)" for n in (1, 2, 3)]
+        assert len({j.dedupe_key for j in jobs}) == len(jobs) == 8
+    finally:
+        h.close()
+
+    restarted = BotHarness(settings, profile=FIXED, manager_ids={SECOND_MANAGER}, owner_id=OWNER_ID, ocr_provider=Provider())
+    try:
+        make_outbox_due(settings.app.db_file)
+        conn = get_connection(settings.app.db_file)
+        try:
+            assert restarted.loop.run_until_complete(restarted.dispatcher["outbox"].process(restarted.bot, conn)) == 0
+        finally:
+            conn.close()
+        review = restarted.send_photo(user, b"receipt-bytes", file_id="rcpt-70")
+        for staff_id in (OWNER_ID, SECOND_MANAGER):
+            assert [p.photo for p in sent_to(review, staff_id, SendPhoto)] == ["rcpt-70"]
+    finally:
+        restarted.close()

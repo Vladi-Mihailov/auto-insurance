@@ -299,6 +299,8 @@ MGR_TITLE_REVIEW = "🆕 Новая заявка {number}"
 MGR_TITLE_APPLICATION = "📝 Новая заявка {number} — ожидает оплаты"
 MGR_STATUS_APPLICATION = "🕓 Заявка оформлена — ждём оплату и чек от клиента"
 MGR_TITLE = "Заявка {number}"
+MGR_WEB_ORIGIN = "Клиент: заявка с сайта"
+MGR_WEB_PAYMENT = "Оплата — на сайте; подтверждение в /admin/orders"
 MGR_STATUS = {
     "payment_review": "⏳ Ожидает проверки оплаты",
     "awaiting_payment": "❌ Оплата не найдена — ждём новый чек",

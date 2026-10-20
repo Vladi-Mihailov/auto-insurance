@@ -475,6 +475,16 @@ _TPL_ISSUANCE_COLUMN_MIGRATIONS = [
 # sendDocument. NULL for rows written before this column existed.
 _ORDER_FILE_COLUMN_MIGRATIONS = [
     ("telegram_media_type", "TEXT"),
+    # Website-uploaded documents (app.orders.web_documents): the file lives
+    # in private disk storage, not on Telegram. storage_path is the
+    # system-generated file name inside settings.app.web_uploads_dir (NULL
+    # for Telegram-received files, or once retention removed the bytes);
+    # source 'web' (NULL = received by a bot); position = upload order
+    # 1..n; original_filename is display metadata only, never used as a path.
+    ("storage_path", "TEXT"),
+    ("source", "TEXT"),
+    ("position", "INTEGER"),
+    ("original_filename", "TEXT"),
 ]
 
 # Telegram bot conversation NAVIGATION state (which question the bot is

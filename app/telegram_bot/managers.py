@@ -84,6 +84,13 @@ def _origin_lines(conn: sqlite3.Connection, order: Order, client: str) -> list[s
     return [texts.OP_CARD_ORIGIN.format(label=label), ""]
 
 
+def _web_origin_lines(order: Order) -> list[str]:
+    """A website order: no Telegram customer, paid via the website and
+    confirmed at /admin/orders -- never this bot's payment requisites."""
+    contacts = [f"{label}: {value}" for label, value in order.contact_rows]
+    return [texts.MGR_WEB_ORIGIN, *contacts, texts.MGR_WEB_PAYMENT, ""]
+
+
 def _receipt_line(conn: sqlite3.Connection, order: Order) -> str:
     count = len(order_files.list_files(conn, order.id, order_files.KIND_PAYMENT_RECEIPT))
     return texts.MGR_RECEIPTS_SOME.format(count=count) if count else texts.MGR_RECEIPTS_NONE
@@ -95,8 +102,9 @@ def card_text(conn: sqlite3.Connection, settings: Settings, order: Order) -> str
         row = catalog_repo.get_category_by_code(conn, order.vehicle_category_code) if order.vehicle_category_code else None
         category = row.name if row else order.vehicle_category_code
     period = get_period(settings, order.country_code, order.vehicle_category_code, order.period_code) if order.period_code else None
+    web = order.channel != "telegram"
     fresh_application = (
-        order.status == OrderStatus.AWAITING_PAYMENT.value
+        order.status in (OrderStatus.AWAITING_PAYMENT.value, *((OrderStatus.DATA_COMPLETED.value,) if web else ()))
         and not order.is_operator_order
         and not order_files.list_files(conn, order.id, order_files.KIND_PAYMENT_RECEIPT)
     )
@@ -112,8 +120,8 @@ def card_text(conn: sqlite3.Connection, settings: Settings, order: Order) -> str
     lines = [
         title.format(number=order.public_number),
         "",
-        *_origin_lines(conn, order, client),
-        *([] if order.is_operator_order else [*_payment_lines(settings, order), _receipt_line(conn, order), ""]),
+        *(_web_origin_lines(order) if web else _origin_lines(conn, order, client)),
+        *([] if order.is_operator_order or web else [*_payment_lines(settings, order), _receipt_line(conn, order), ""]),
         "Страхование:",
         category or "—",
         f"📅 начало {order.start_date:%d.%m.%Y}" if order.start_date else "📅 начало —",
@@ -146,6 +154,8 @@ def card_text(conn: sqlite3.Connection, settings: Settings, order: Order) -> str
 def card_keyboard(conn: sqlite3.Connection, order: Order, *, auto_issuance: bool = False) -> InlineKeyboardMarkup | None:
     """auto_issuance -- settings.telegram_bot.tpl_auto_issuance. Off: the
     manual policy upload is the only (primary) action on a paid order."""
+    if order.channel != "telegram":
+        return None  # a website order is handled at /admin/orders, never by these buttons
     rows: list[list[InlineKeyboardButton]] = []
 
     def button(text: str, action: str) -> InlineKeyboardButton:

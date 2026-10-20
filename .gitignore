@@ -4,6 +4,9 @@
 data/*.db
 data/*.db-*
 data/uploads/
+# Website-uploaded customer document photos (app/orders/web_documents.py) --
+# personal data, never committed.
+data/web_uploads/
 # Telethon session files (auto-insurance's own dedicated operator-notify
 # session -- see app/notifications/telegram.py) -- as sensitive as a
 # logged-in credential, never committed.

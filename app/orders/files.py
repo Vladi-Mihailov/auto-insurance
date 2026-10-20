@@ -23,6 +23,11 @@ class OrderFile:
     file_size: int | None
     telegram_media_type: str | None  # "photo" | "document"
     created_at: str
+    # Website uploads only (app.orders.web_documents) -- None for files a bot received.
+    storage_path: str | None = None
+    source: str | None = None
+    position: int | None = None
+    original_filename: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "OrderFile":
@@ -41,6 +46,10 @@ def add_file(
     file_size: int | None,
     telegram_media_type: str,
     commit: bool = True,
+    storage_path: str | None = None,
+    source: str | None = None,
+    position: int | None = None,
+    original_filename: str | None = None,
 ) -> int | None:
     """New row id, or None when this exact Telegram file (file_unique_id) is
     already attached to this order under this kind -- a duplicate upload is
@@ -48,8 +57,8 @@ def add_file(
     cursor = conn.execute(
         """INSERT OR IGNORE INTO insurance_order_files
                (order_id, kind, bot_key, telegram_file_id, telegram_file_unique_id, mime_type, file_size,
-                telegram_media_type, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                telegram_media_type, created_at, storage_path, source, position, original_filename)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             order_id,
             kind,
@@ -60,6 +69,10 @@ def add_file(
             file_size,
             telegram_media_type,
             datetime.now(timezone.utc).isoformat(),
+            storage_path,
+            source,
+            position,
+            original_filename,
         ),
     )
     if commit:
@@ -80,6 +93,13 @@ def list_files(conn: sqlite3.Connection, order_id: int, kind: str | None = None)
 def get_file(conn: sqlite3.Connection, file_row_id: int) -> OrderFile | None:
     row = conn.execute("SELECT * FROM insurance_order_files WHERE id = ?", (file_row_id,)).fetchone()
     return OrderFile.from_row(row) if row else None
+
+
+def set_telegram_file_id(conn: sqlite3.Connection, file_row_id: int, telegram_file_id: str) -> None:
+    """A website-stored file after its first upload to Telegram: later sends
+    by the same bot reuse Telegram's own copy instead of re-uploading."""
+    conn.execute("UPDATE insurance_order_files SET telegram_file_id = ? WHERE id = ?", (telegram_file_id, file_row_id))
+    conn.commit()
 
 
 def latest_file(conn: sqlite3.Connection, order_id: int, kind: str) -> OrderFile | None:

@@ -17,13 +17,15 @@ class is logged -- never a Telegram response body or personal data.
 import asyncio
 import logging
 import sqlite3
+from pathlib import Path
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.types import ReplyParameters
+from aiogram.types import BufferedInputFile, ReplyParameters
 
 from app.notifications import bot_outbox
 from app.orders import files as order_files
+from app.orders import web_documents
 from app.orders.repository import get_order_by_id
 from app.settings import Settings
 from app.telegram_bot import order_views, staff, texts
@@ -56,7 +58,11 @@ class OutboxWorker:
 
     async def _run(self, bot: Bot, conn: sqlite3.Connection, job: bot_outbox.OutboxJob) -> bool:
         order = get_order_by_id(conn, job.order_id)
-        if order is None or order.bot_key != self._profile.bot_key:
+        # A bot order is only ever delivered by its own bot; a WEBSITE order
+        # has no bot of its own -- its jobs carry the delivery bot's key
+        # (app.orders.web_documents.delivery_bot_key), and due_jobs already
+        # selected only this bot's jobs.
+        if order is None or (order.channel == "telegram" and order.bot_key != self._profile.bot_key):
             bot_outbox.mark_sent(conn, job.id)  # nothing sensible to deliver
             return False
         try:
@@ -75,7 +81,7 @@ class OutboxWorker:
         return True
 
     async def _send(self, bot: Bot, conn: sqlite3.Connection, job: bot_outbox.OutboxJob, order) -> None:
-        if job.kind in _MANAGER_KINDS and not staff.is_staff(conn, order.bot_key, job.target_chat_id):
+        if job.kind in _MANAGER_KINDS and not staff.is_staff(conn, job.bot_key, job.target_chat_id):
             # Queued for someone who has been removed from the staff since:
             # order data never goes to them (the job is closed, not retried).
             logger.info("Outbox job %s skipped: recipient is no longer staff", job.id)
@@ -156,6 +162,20 @@ class OutboxWorker:
             total=len(same_kind) or 1,
         )
         reply = ReplyParameters(message_id=card.message_id, allow_sending_without_reply=True) if card else None
+        if not file.telegram_file_id and file.storage_path:
+            # A website upload: sent from private storage the first time, as
+            # a document (full resolution); Telegram's file id is kept so
+            # every later send by this bot reuses it instead of re-uploading.
+            data = web_documents.read_stored(self._settings, file.storage_path)
+            if data is None:
+                logger.warning("Outbox job %s: stored document missing for order %s", job.id, order.public_number)
+                return
+            extension = Path(file.storage_path).suffix or ".jpg"
+            upload = BufferedInputFile(data, filename=f"{order.public_number}-document-{file.position or 1}{extension}")
+            message = await bot.send_document(job.target_chat_id, upload, caption=caption, reply_parameters=reply)
+            if message.document is not None:
+                order_files.set_telegram_file_id(conn, file.id, message.document.file_id)
+            return
         if file.telegram_media_type == "photo":
             await bot.send_photo(job.target_chat_id, file.telegram_file_id, caption=caption, reply_parameters=reply)
         else:

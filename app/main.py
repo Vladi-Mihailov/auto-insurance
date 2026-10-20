@@ -15,6 +15,21 @@ _settings = get_settings()
 init_db(_settings.app.db_file)
 
 
+def _cleanup_web_uploads() -> None:
+    """Abandoned website uploads / expired documents (best-effort, never raises)."""
+    from app.db import get_connection
+    from app.orders.web_documents import cleanup_storage
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        cleanup_storage(conn, _settings)
+    finally:
+        conn.close()
+
+
+_cleanup_web_uploads()
+
+
 class SessionCookieMiddleware(BaseHTTPMiddleware):
     """Applies the anonymous session cookie to whatever response comes back.
 
