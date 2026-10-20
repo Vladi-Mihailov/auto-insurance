@@ -1,4 +1,4 @@
-"""Admin retail-price editor (/admin/prices?country=GE|TR).
+"""Admin retail-price editor (/admin/prices?country=GE|TR|AM).
 
 A thin UI over app.pricing.admin -- the SAME service the Telegram bot's
 "💰 Цены" uses, so both surfaces share one set of rules (stale protection,
@@ -31,9 +31,7 @@ from app.web.templating import render
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
 # Countries whose prices are fixed-period config tariffs (editable here).
-# AM is priced by a linear duration formula (duration_ranges.AM) -- nothing
-# to override.
-PRICE_COUNTRIES = {"GE": "🇬🇪 Грузия", "TR": "🇹🇷 Турция"}
+PRICE_COUNTRIES = {"GE": "🇬🇪 Грузия", "TR": "🇹🇷 Турция", "AM": "🇦🇲 Армения"}
 DEFAULT_COUNTRY = "GE"
 
 CHANNEL_LABELS = {price_admin.CHANNEL_WEB: "сайт", price_admin.CHANNEL_BOT: "бот"}

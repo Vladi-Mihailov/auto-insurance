@@ -175,7 +175,8 @@ def test_manual_complete_flow_with_vin(harness, settings, ids):
     assert draft["vehicle_confirmed"] is True and draft["data_entry_method"] == "manual"
 
     assert _order_count(settings) == 0  # no order until "✅ Всё верно"
-    after = last_screen(harness.press(user, "fc:confirm"))
+    # the customer's own chat -- the staff are notified of the application too
+    after = last_screen([c for c in harness.press(user, "fc:confirm") if getattr(c, "chat_id", None) == user.id])
     # Payment details aren't configured in this test -> fail-safe message
     # (the full payment flow is covered in tests/test_telegram_bot_orders.py).
     assert "Оплата временно недоступна" in after.text

@@ -163,7 +163,7 @@ def test_documents_flow_goes_from_review_straight_to_payment(settings, ids):
         assert not any("Email" in t or "Телефон" in t for t, _ in buttons(review))
         assert buttons(review)[0] == ("✅ Всё верно", "fc:confirm")
         calls = h.press(user, "fc:confirm")  # "✅ Всё верно" -- name/passport/citizenship came from the passport photo
-        payment = last_screen(calls)
+        payment = last_screen([c for c in calls if getattr(c, "chat_id", None) == user.id])  # the staff card follows
         (order,) = _orders(settings, FIXED, 2)
         assert payment.text.startswith(f"💳 Оплата заказа {order.public_number}")
         assert not any(t.startswith(("Проверьте заявку", "Проверьте данные")) for t in _texts(calls))
@@ -180,7 +180,7 @@ def test_manual_flow_never_asks_email_or_phone(settings, ids):
         review = last_screen(calls)
         assert review.text.startswith("Проверьте данные:") and "Email" not in review.text and "Телефон" not in review.text
         calls = h.press(make_user(3), "fc:confirm")
-        assert last_screen(calls).text.startswith("💳 Оплата заказа")
+        assert last_screen([c for c in calls if getattr(c, "chat_id", None) == 3]).text.startswith("💳 Оплата заказа")
         assert not _asked_for_contacts(calls)
     finally:
         h.close()

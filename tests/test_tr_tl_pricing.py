@@ -30,7 +30,7 @@ from app.dates.rules import today_in_georgia
 from app.db import get_connection
 from app.deps import get_settings
 from app.main import app
-from app.pricing.provider import _round_to_nearest_x99, available_periods, get_period, resolve_duration_price
+from app.pricing.provider import _round_to_nearest_x99, available_periods, get_period
 from app.settings import PeriodConfig, TrTlConversionConfig
 
 _settings = get_settings()
@@ -61,7 +61,7 @@ def _iso(offset_days: int) -> str:
 def real_config(monkeypatch):
     """TR's TL-based pricing (including tr_tl_conversion) lives in the REAL
     config/config.yaml, not the test fixture -- same fixture shape as
-    tests/test_am_linear_pricing.py."""
+    tests/test_am_fixed_period_pricing.py."""
     monkeypatch.delenv("INSURANCE_CONFIG_FILE", raising=False)
     get_settings.cache_clear()
     yield
@@ -367,8 +367,7 @@ def test_tr_truck_full_flow_order_summary_and_payment(real_config):
 
 
 # ---------------------------------------------------------------------------
-# Regression: GE pricing and AM pricing/date-range are untouched by TR's
-# new TL-based mechanism.
+# Regression: GE and AM pricing are untouched by TR's TL-based mechanism.
 # ---------------------------------------------------------------------------
 
 
@@ -384,21 +383,15 @@ def test_ge_pricing_unaffected_by_tr_tl_pricing(real_config):
         assert periods == expected, category_code
 
 
-def test_am_linear_pricing_unaffected_by_tr_tl_pricing(real_config):
-    """AM's own mechanism (duration_ranges/LinearDurationPricingConfig) is a
-    completely separate config tree from pricing.TR/tr_tl_conversion --
-    spot-check a couple of AM's own control prices."""
+def test_am_pricing_unaffected_by_tr_tl_pricing(real_config):
+    """AM's own literal pricing.AM RUB prices are a completely separate
+    config tree from pricing.TR/tr_tl_conversion -- the TL formula is only
+    ever applied for country_code == "TR"."""
     settings = get_settings()
-    assert resolve_duration_price(settings, "AM", "passenger_car", 15) == 134900
-    assert resolve_duration_price(settings, "AM", "passenger_car", 30) == 214900
-    assert resolve_duration_price(settings, "AM", "motorcycle", 15) == 105900
-
-
-def test_am_exact_date_range_still_works_unaffected(real_config):
-    """AM stays an EXACT DATE RANGE product -- unaffected by TR becoming a
-    (still FIXED-period) TL-priced product."""
-    client = TestClient(app)
-    _start(client, "AM")
-    response = client.get("/category-period")
-    assert response.status_code == 200
-    assert 'id="period-grid"' not in response.text
+    for category_code, expected in (
+        ("passenger_car", {"15d": 1399, "30d": 2299, "90d": 3999}),
+        ("motorcycle", {"15d": 1099, "30d": 1599, "90d": 2999}),
+        ("truck", {"15d": 2899, "30d": 4599, "90d": 7699}),
+    ):
+        periods = {p.code: p.price_rub for p in available_periods(settings, "AM", category_code)}
+        assert periods == expected, category_code

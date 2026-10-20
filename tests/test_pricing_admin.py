@@ -119,6 +119,109 @@ def test_matrix_effective_price_is_exactly_what_checkout_uses(conn, settings, co
         assert {c: cell.effective_rub for c, cell in row.cells.items()} == _effective(settings, country, row.category_code)
 
 
+# ------------------------------------------------------------------ Armenia
+
+# Production GE customer-facing effective prices on 2026-10-20 -- the
+# one-time snapshot config.yaml's pricing.AM was initialised with.
+_AM_INITIAL = {
+    "passenger_car": {"15d": 1399, "30d": 2299, "90d": 3999},
+    "motorcycle": {"15d": 1099, "30d": 1599, "90d": 2999},
+    "bus": {"15d": 2199, "30d": 3399, "90d": 6499},
+    "truck": {"15d": 2899, "30d": 4599, "90d": 7699},
+    "trailer": {"15d": 899, "30d": 1299, "90d": 1999},
+    "special_vehicle": {"15d": 1349, "30d": 2149, "90d": 3649},
+}
+
+
+def test_am_matrix_is_the_initial_ge_snapshot(conn, settings):
+    matrix = price_admin.price_matrix(conn, settings, "AM")
+    assert matrix.periods == [("15d", "15 дней"), ("30d", "30 дней"), ("90d", "90 дней")]
+    got = {r.category_code: {c: cell.effective_rub for c, cell in r.cells.items()} for r in matrix.rows}
+    assert got == _AM_INITIAL
+    assert all(r.channels == ("web",) for r in matrix.rows)  # no AM bot
+    assert all(not cell.has_override for r in matrix.rows for cell in r.cells.values())  # BASE, not overrides
+
+
+def test_am_has_no_linear_duration_pricing_left(settings):
+    from app.pricing.provider import get_duration_range, resolve_duration_price
+
+    for category in _AM_INITIAL:
+        assert get_duration_range(settings, "AM", category) is None
+        assert resolve_duration_price(settings, "AM", category, 15) is None
+        assert _effective(settings, "AM", category) == _AM_INITIAL[category]
+
+
+def test_am_and_ge_overrides_are_independent(conn, settings):
+    ge_before = {c: _effective(settings, "GE", c) for c in _AM_INITIAL}
+    _set(conn, settings, "AM", "passenger_car", "30d", 2299, 2599)
+    assert _effective(settings, "AM", "passenger_car")["30d"] == 2599
+    assert {c: _effective(settings, "GE", c) for c in _AM_INITIAL} == ge_before
+    _set(conn, settings, "GE", "passenger_car", "30d", 2149, 2999)
+    assert _effective(settings, "AM", "passenger_car")["30d"] == 2599  # a GE change never moves AM
+    assert {(o.vehicle_category_code, o.period_code) for o in price_overrides.list_overrides(conn, "AM")} == {
+        ("passenger_car", "30d")
+    }
+
+
+def test_am_reset_stale_and_history(conn, settings):
+    _set(conn, settings, "AM", "truck", "90d", 7699, 7999, actor="admin")
+    with pytest.raises(price_admin.StalePrice):
+        _set(conn, settings, "AM", "truck", "90d", 7699, 8199)
+    with pytest.raises(price_admin.StalePrice):
+        _reset(conn, settings, "AM", "truck", "90d", 7699)
+    _reset(conn, settings, "AM", "truck", "90d", 7999, actor="admin")
+    assert _effective(settings, "AM", "truck")["90d"] == 7699  # back to the AM base, not GE's
+    rows = _history(conn)
+    assert [(r["country_code"], r["action"], r["old_price_rub"], r["new_price_rub"], r["actor"], r["source"]) for r in rows] == [
+        ("AM", "set", 7699, 7999, "admin", "web"),
+        ("AM", "reset", 7999, 7699, "admin", "web"),
+    ]
+
+
+def test_web_am_tab(web, settings):
+    page = web.get("/admin/prices?country=AM", auth=_AUTH)
+    assert page.status_code == 200
+    assert "Цены — 🇦🇲 Армения" in page.text
+    for code, label in (("GE", "🇬🇪 Грузия"), ("TR", "🇹🇷 Турция"), ("AM", "🇦🇲 Армения")):
+        assert f'href="/admin/prices?country={code}"' in page.text and label in page.text
+    assert 'id="cell-passenger_car-15d"' in page.text and 'name="expected_rub" value="1399"' in page.text
+    assert page.text.count('id="cell-') == 18  # 6 categories x 15d/30d/90d
+    assert web.get("/admin/prices?country=AM").status_code == 401
+
+
+def test_web_am_change_applies_to_the_am_checkout_at_once(web, settings):
+    response = web.post(
+        "/admin/prices/set",
+        data={"country": "AM", "category_code": "passenger_car", "period_code": "15d", "expected_rub": "1399", "price": "1 499"},
+        auth=_AUTH, headers=_SAME_ORIGIN, follow_redirects=False,
+    )
+    assert response.status_code == 303
+    customer = TestClient(app)
+    customer.get("/start?country=AM")
+    periods = {p["code"]: p["price_rub"] for p in customer.get("/api/periods", params={"category_code": "passenger_car"}).json()}
+    assert periods == {"15d": 1499, "30d": 2299, "90d": 3999}
+    assert _effective(settings, "GE", "passenger_car")["15d"] == 1349  # GE (config base) untouched
+
+
+def test_historical_am_order_keeps_its_price(web, settings, conn):
+    start = date.today() + timedelta(days=10)
+    order = create_order(  # a pre-migration AM order: exact dates, no period
+        conn, session_id="am-hist", country_code="AM", vehicle_category_code="passenger_car", period_code=None,
+        start_date=start, end_date=start + timedelta(days=45), price_customer_minor=309900, data_entry_method="manual",
+        registration_number="AMHIST1", identifier_type="vin", identifier="JYARJ41E7KA000704", manufacturer_id=None,
+        manufacturer_name="M", model_id=None, model_name="X", full_name="Ivanov Ivan", contact_email="a@example.com",
+        contact_telegram=None, contact_phone=None, contact_max=None, contact_other=None, customer_currency="RUB",
+        purchase_currency="AMD",
+    )
+    web.post(
+        "/admin/prices/set",
+        data={"country": "AM", "category_code": "passenger_car", "period_code": "30d", "expected_rub": "2299", "price": "2799"},
+        auth=_AUTH, headers=_SAME_ORIGIN,
+    )
+    stored = get_order_by_id(conn, order.id)
+    assert (stored.price_customer_minor, stored.period_code, stored.end_date) == (309900, None, start + timedelta(days=45))
+
+
 # --------------------------------------------------------------- isolation
 
 

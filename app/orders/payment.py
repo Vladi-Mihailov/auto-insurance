@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from app.analytics.repository import log_event
 from app.notifications import bot_outbox
+from app.orders import files as order_files
 from app.orders.models import Order
 from app.orders.repository import get_order_by_id, transition_if
 from app.orders.state_machine import OrderStatus
@@ -46,9 +47,24 @@ def _load(conn: sqlite3.Connection, order_id: int) -> Order:
     return order
 
 
-def mark_awaiting_payment(conn: sqlite3.Connection, order_id: int, *, note: str) -> PaymentAction:
-    history_id = transition_if(conn, order_id, OrderStatus.DATA_COMPLETED, OrderStatus.AWAITING_PAYMENT, note=note)
-    return PaymentAction(changed=history_id is not None, order=_load(conn, order_id), history_id=history_id)
+def mark_awaiting_payment(conn: sqlite3.Connection, order_id: int, *, note: str, manager_ids=()) -> PaymentAction:
+    """The customer submitted the application. For a Telegram customer
+    order, the bot's staff are notified in the same transaction: the order
+    card plus every document the customer attached for issuance (vehicle
+    documents only -- receipts don't exist yet and keep their own review
+    notification, see submit_payment_claim)."""
+    history_id = transition_if(
+        conn, order_id, OrderStatus.DATA_COMPLETED, OrderStatus.AWAITING_PAYMENT, note=note, commit=False
+    )
+    if history_id is None:  # not in DATA_COMPLETED any more: nothing was written
+        return PaymentAction(changed=False, order=_load(conn, order_id))
+    order = _load(conn, order_id)
+    jobs: list[int] = []
+    if _is_telegram(order) and manager_ids and not order.is_operator_order:
+        documents = order_files.list_files(conn, order.id, order_files.KIND_VEHICLE_DOCUMENT)
+        jobs = bot_outbox.enqueue_application(conn, order, manager_ids=manager_ids, file_row_ids=[f.id for f in documents])
+    conn.commit()
+    return PaymentAction(changed=True, order=order, history_id=history_id, outbox_job_ids=jobs)
 
 
 def mark_operator_issuance(conn: sqlite3.Connection, order_id: int, *, actor: str) -> PaymentAction:

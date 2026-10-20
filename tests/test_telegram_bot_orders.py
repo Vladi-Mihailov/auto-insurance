@@ -4,6 +4,7 @@ resume -- all through the real Dispatcher with the offline harness (no
 Telegram, no OpenAI, no bank). Real config.yaml pricing; fake payment
 details from env; a fresh SQLite file per test."""
 
+import dataclasses
 import json
 import logging
 
@@ -81,6 +82,12 @@ def _draft(settings, user_id):
         return get_draft(conn, session_id_for(TEST_PROFILE.bot_key, user_id)) or {}
     finally:
         conn.close()
+
+
+def _customer_screen(calls, user):
+    """The last screen in the CUSTOMER's own chat -- since a submitted
+    application also notifies the staff, the very last call may be theirs."""
+    return last_screen([c for c in calls if getattr(c, "chat_id", None) == user.id])
 
 
 def _orders(settings, user_id):
@@ -213,8 +220,8 @@ def test_continue_creates_one_order_with_all_metadata(harness, settings, ids):
 def test_double_continue_creates_one_order(harness, settings, ids):
     user = make_user(2)
     _to_final_review(harness, user, ids)
-    first = last_screen(harness.press(user, "fc:continue"))
-    second = last_screen(harness.press(user, "fc:continue"))
+    first = _customer_screen(harness.press(user, "fc:continue"), user)
+    second = _customer_screen(harness.press(user, "fc:continue"), user)
     assert len(_orders(settings, 2)) == 1
     assert first.text == second.text and first.text.startswith("💳 Оплата заказа")
 
@@ -245,7 +252,7 @@ def test_replay_after_crash_mid_creation_creates_no_duplicate(settings, ids):
         conn.close()
     restarted = BotHarness(settings, manager_ids={MANAGER})
     try:
-        screen = last_screen(restarted.press(user, "fc:continue"))
+        screen = _customer_screen(restarted.press(user, "fc:continue"), user)
         restarted.press(user, "fc:continue")
     finally:
         restarted.close()
@@ -267,7 +274,7 @@ def test_order_uses_the_current_price_then_keeps_it(harness, settings, ids):
     calls = harness.press(user, "fc:continue")
     (order,) = _orders(settings, 4)
     assert order.price_customer_minor == 255500  # re-read at creation
-    assert "Сумма: 2 555 ₽" in last_screen(calls).text
+    assert "Сумма: 2 555 ₽" in _customer_screen(calls, user).text
     conn = _conn(settings)
     try:
         price_overrides.upsert_override(conn, country_code="GE", vehicle_category_code="passenger_car", period_code="30d", price_rub=9999, updated_by="t")
@@ -310,7 +317,7 @@ def test_incomplete_draft_cannot_be_ordered_by_a_crafted_continue(harness, setti
 
 def test_payment_screen_shows_configured_details(harness, settings, ids):
     order, calls = _place_order(harness, make_user(10), ids)
-    screen = last_screen(calls)
+    screen = _customer_screen(calls, make_user(10))
     assert screen.text == (
         f"💳 Оплата заказа {order.public_number}\n\n"
         "Сумма: 2 149 ₽\n\nБанк: Сбербанк\nПеревод по номеру телефона:\n"
@@ -332,7 +339,7 @@ def test_incomplete_payment_config_fails_safely(settings, ids, monkeypatch, capl
             order, calls = _place_order(h, make_user(11), ids)
     finally:
         h.close()
-    screen = last_screen(calls)
+    screen = _customer_screen(calls, make_user(11))
     assert screen.text == f"⏳ Заказ {order.public_number} создан.\n\nОплата временно недоступна — менеджер свяжется с вами в этом чате."
     assert FAKE_PHONE not in screen.text and "Сбербанк" not in screen.text
     assert order.status == OrderStatus.AWAITING_PAYMENT.value
@@ -439,19 +446,214 @@ def test_every_configured_manager_gets_a_card_and_the_documents(two_managers, se
             {"file_id": "techpass", "file_unique_id": "u-tp", "kind": "photo", "mime_type": "image/jpeg", "file_size": 1}]})
     finally:
         conn.close()
-    two_managers.press(user, "fc:continue")
+    application_calls = two_managers.press(user, "fc:continue")
     (order,) = _orders(settings, 30)
+    for manager in (MANAGER, MANAGER_B):
+        # submitted application: the card, then the customer's documents
+        (card,) = sent_to(application_calls, manager, SendMessage)
+        assert card.text.startswith(f"📝 Новая заявка {order.public_number}")
+        (photo,) = sent_to(application_calls, manager, SendPhoto)
+        assert photo.photo == "techpass"
+        assert photo.caption == f"📎 {order.public_number}\nДокумент клиента 1 из 1 (техпаспорт / паспорт)"
     calls = _receipt_photo(two_managers, user)
     for manager in (MANAGER, MANAGER_B):
+        # payment review: a fresh card and the receipt -- the documents are not re-sent
         assert len(sent_to(calls, manager, SendMessage)) == 1
-        photos = sent_to(calls, manager, SendPhoto)
-        assert [p.photo for p in photos] == ["techpass", "rcpt-1"]
-        assert "Документ ТС" in photos[0].caption
+        assert [p.photo for p in sent_to(calls, manager, SendPhoto)] == ["rcpt-1"]
     conn = _conn(settings)
     try:
         assert {m.manager_user_id for m in bot_outbox.manager_messages(conn, order.id)} == {MANAGER, MANAGER_B}
     finally:
         conn.close()
+
+
+# ------------------------------------------- APPLICATION -> STAFF + DOCUMENTS
+
+_DOCS = [
+    {"file_id": f"doc-{n}", "file_unique_id": f"u-doc-{n}", "kind": "photo", "mime_type": "image/jpeg", "file_size": 1}
+    for n in (1, 2, 3)
+]
+
+
+def _submit_with_documents(h, settings, user, ids, documents=_DOCS):
+    _to_final_review(h, user, ids)
+    conn = _conn(settings)
+    try:
+        merge_draft(conn, session_id_for(h.config.profile.bot_key, user.id), {"document_files": documents})
+    finally:
+        conn.close()
+    calls = h.press(user, "fc:continue")
+    conn = _conn(settings)
+    try:
+        (order,) = list_telegram_orders(conn, bot_key=h.config.profile.bot_key, telegram_user_id=user.id)
+    finally:
+        conn.close()
+    return order, calls
+
+
+def _staff_photos(calls, manager):
+    return [p.photo for p in sent_to(calls, manager, SendPhoto)]
+
+
+def _run_outbox(h):
+    conn = get_connection(h.dispatcher["settings"].app.db_file)
+    try:
+        return h.loop.run_until_complete(h.dispatcher["outbox"].process(h.bot, conn))
+    finally:
+        conn.close()
+
+
+def test_submitted_application_sends_the_card_then_every_document(harness, settings, ids):
+    user = make_user(40)
+    order, calls = _submit_with_documents(harness, settings, user, ids)
+    staff_calls = sent_to(calls, MANAGER)
+    # the summary first, then each document, in upload order
+    assert isinstance(staff_calls[0], SendMessage)
+    card = staff_calls[0]
+    assert card.text.startswith(f"📝 Новая заявка {order.public_number} — ожидает оплаты")
+    assert "🕓 Заявка оформлена — ждём оплату и чек от клиента" in card.text
+    assert "Госномер AB123CD" in card.text and "Сумма к получению: 2 149 ₽" in card.text
+    photos = sent_to(calls, MANAGER, SendPhoto)
+    assert [p.photo for p in photos] == ["doc-1", "doc-2", "doc-3"]
+    assert [p.caption for p in photos] == [
+        f"📎 {order.public_number}\nДокумент клиента {n} из 3 (техпаспорт / паспорт)" for n in (1, 2, 3)
+    ]
+    assert all("/" not in p.photo and "\\" not in p.photo for p in photos)  # Telegram file ids, never paths
+    # the customer still sees their payment screen
+    assert _customer_screen(calls, user).text.startswith("💳 Оплата заказа")
+
+
+def test_manual_application_without_documents_sends_only_the_card(harness, settings, ids):
+    user = make_user(41)
+    order, calls = _place_order(harness, user, ids)
+    (card,) = sent_to(calls, MANAGER, SendMessage)
+    assert card.text.startswith(f"📝 Новая заявка {order.public_number}")
+    assert sent_to(calls, MANAGER, SendPhoto) == []
+
+
+def test_replayed_confirmation_never_resends_the_application(harness, settings, ids):
+    user = make_user(42)
+    _order, first = _submit_with_documents(harness, settings, user, ids)
+    second = harness.press(user, "fc:continue")
+    assert len(sent_to(first, MANAGER, SendMessage)) == 1 and len(_staff_photos(first, MANAGER)) == 3
+    assert sent_to(second, MANAGER) == []
+    make_outbox_due(settings.app.db_file)
+    assert _run_outbox(harness) == 0  # restart/retry loop: nothing left to send
+
+
+def test_application_goes_only_to_this_bots_staff(settings, ids):
+    other_profile = dataclasses.replace(TEST_PROFILE, bot_key="otherbot")
+    ours = BotHarness(settings, manager_ids={MANAGER})
+    other = BotHarness(settings, profile=other_profile, manager_ids={777})
+    try:
+        order, calls = _submit_with_documents(ours, settings, make_user(43), ids)
+        assert len(_staff_photos(calls, MANAGER)) == 3
+        assert sent_to(calls, 777) == []
+        # the other bot's worker never picks up (or sends) this bot's jobs
+        make_outbox_due(settings.app.db_file)
+        assert _run_outbox(other) == 0
+        assert sent_to(other.session.calls, 777) == []
+        conn = _conn(settings)
+        try:
+            jobs = bot_outbox.list_jobs(conn, order.id)
+        finally:
+            conn.close()
+        assert {j.bot_key for j in jobs} == {TEST_PROFILE.bot_key} and {j.target_chat_id for j in jobs} == {MANAGER}
+    finally:
+        ours.close()
+        other.close()
+
+
+def test_receipt_is_not_part_of_the_application_and_documents_are_not_resent(harness, settings, ids):
+    user = make_user(44)
+    order, application = _submit_with_documents(harness, settings, user, ids)
+    assert "rcpt-1" not in _staff_photos(application, MANAGER)
+    review = _receipt_photo(harness, user)
+    (card,) = sent_to(review, MANAGER, SendMessage)
+    assert card.text.startswith(f"🆕 Новая заявка {order.public_number}")
+    photos = sent_to(review, MANAGER, SendPhoto)
+    assert [p.photo for p in photos] == ["rcpt-1"]  # once, on its own path
+    assert photos[0].caption.startswith(f"🧾 Чек об оплате · {order.public_number}")
+
+
+def test_failed_document_is_retried_alone(harness, settings, ids):
+    session = harness.session
+    real = session.make_request
+    failures = {"doc-2": 1}
+
+    async def flaky(bot, method, timeout=None):
+        if isinstance(method, SendPhoto) and failures.get(method.photo):
+            failures[method.photo] -= 1
+            raise RuntimeError("simulated Telegram outage")
+        return await real(bot, method, timeout)
+
+    session.make_request = flaky
+    user = make_user(45)
+    order, calls = _submit_with_documents(harness, settings, user, ids)
+    assert _staff_photos(calls, MANAGER) == ["doc-1", "doc-3"]
+    assert _customer_screen(calls, user).text.startswith("💳 Оплата заказа")  # checkout unaffected
+    conn = _conn(settings)
+    try:
+        failed = [j for j in bot_outbox.list_jobs(conn, order.id) if j.status == "pending"]
+    finally:
+        conn.close()
+    assert len(failed) == 1 and failed[0].kind == bot_outbox.KIND_MANAGER_FILE and failed[0].attempts == 1
+
+    start = len(session.calls)
+    make_outbox_due(settings.app.db_file)
+    assert _run_outbox(harness) == 1
+    retried = session.calls[start:]
+    assert _staff_photos(retried, MANAGER) == ["doc-2"]  # only the failed one; no card, no doc-1/doc-3
+    assert sent_to(retried, MANAGER, SendMessage) == []
+
+
+def test_staff_delivery_failure_never_breaks_the_customer_checkout(harness, settings, ids):
+    harness.session.fail_chats.add(MANAGER)
+    user = make_user(46)
+    order, calls = _submit_with_documents(harness, settings, user, ids)
+    assert _customer_screen(calls, user).text.startswith("💳 Оплата заказа")
+    assert _order(settings, order.id).status == OrderStatus.AWAITING_PAYMENT.value
+    conn = _conn(settings)
+    try:
+        jobs = bot_outbox.list_jobs(conn, order.id)
+    finally:
+        conn.close()
+    assert len(jobs) == 4 and all(j.status == "pending" for j in jobs)  # queued for retry, none lost
+    harness.session.fail_chats.clear()
+    make_outbox_due(settings.app.db_file)
+    start = len(harness.session.calls)
+    _run_outbox(harness)
+    later = harness.session.calls[start:]
+    assert len(sent_to(later, MANAGER, SendMessage)) == 1 and _staff_photos(later, MANAGER) == ["doc-1", "doc-2", "doc-3"]
+
+
+def test_removed_staff_member_gets_no_documents(two_managers, settings, ids):
+    two_managers.session.fail_chats.add(MANAGER_B)  # B's jobs stay queued...
+    order, _ = _submit_with_documents(two_managers, settings, make_user(47), ids)
+    conn = _conn(settings)
+    try:
+        conn.execute("UPDATE telegram_bot_staff SET active = 0 WHERE telegram_user_id = ?", (MANAGER_B,))  # ...B is removed
+        conn.commit()
+    finally:
+        conn.close()
+    two_managers.session.fail_chats.clear()
+    make_outbox_due(settings.app.db_file)
+    start = len(two_managers.session.calls)
+    _run_outbox(two_managers)
+    assert sent_to(two_managers.session.calls[start:], MANAGER_B) == []
+
+
+def test_order_submitted_before_application_notices_gets_documents_at_review(harness, settings, ids):
+    user = make_user(48)
+    order, _ = _submit_with_documents(harness, settings, user, ids)
+    conn = _conn(settings)
+    try:  # as if the order predates the application notification
+        conn.execute("DELETE FROM telegram_outbox WHERE order_id = ?", (order.id,))
+        conn.commit()
+    finally:
+        conn.close()
+    review = _receipt_photo(harness, user)
+    assert _staff_photos(review, MANAGER) == ["doc-1", "doc-2", "doc-3", "rcpt-1"]
 
 
 def test_non_manager_cannot_act(harness, settings, ids):

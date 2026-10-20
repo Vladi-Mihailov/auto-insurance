@@ -1,14 +1,11 @@
 """Armenia (AM) category expansion: passenger_car -> all six categories.
 
-Business confirmed 2026-09-06 that Armenia's tariff grid is LITERALLY
-Georgia's own tariff grid for the corresponding category -- each AM
-category's two reference points (15d/30d) are copied directly from
-config.yaml's pricing.GE.<category> 15d/30d prices, no markup, no separate
-AM business data. The mechanism itself (exact start/end dates, 10-365 day
-range, 15-day default, linear extrapolation, ROUND_HALF_UP) is completely
-unchanged from passenger_car (see tests/test_am_linear_pricing.py) -- this
-file only covers the five newly-enabled categories' own numbers plus the
-category-aware engine_power fix.
+AM was opened for all six categories on 2026-09-06 as an EXACT DATE RANGE
+product; on 2026-10-20 business moved it to FIXED PERIODS (15d/30d/90d)
+exactly like Georgia, each category with its own literal pricing.AM prices
+in config.yaml (NOT linked to pricing.GE -- see the comment there). This
+file covers every category's own AM numbers and flow plus the
+category-aware engine_power rule.
 
 engine_power: trailer has no engine, so it must not be shown or required
 for AM trailer even though AM otherwise requires it (see
@@ -27,9 +24,9 @@ from fastapi.testclient import TestClient
 from app.catalog.repository import mark_models_synced, upsert_category, upsert_manufacturer, upsert_model
 from app.dates.rules import today_in_georgia
 from app.db import get_connection
-from app.deps import get_settings
+from app.deps import SESSION_COOKIE_NAME, get_settings
 from app.main import app
-from app.pricing.provider import resolve_duration_price
+from app.sessions.repository import get_draft
 
 _settings = get_settings()
 
@@ -59,9 +56,8 @@ def _iso(offset_days: int) -> str:
 
 @pytest.fixture
 def real_config(monkeypatch):
-    """AM's per-category duration_ranges/pricing/catalog allow-list live in
-    the REAL config/config.yaml, not the test fixture -- same fixture shape
-    as tests/test_am_linear_pricing.py."""
+    """AM's per-category pricing/catalog allow-list live in the REAL
+    config/config.yaml, not the test fixture."""
     monkeypatch.delenv("INSURANCE_CONFIG_FILE", raising=False)
     get_settings.cache_clear()
     yield
@@ -70,6 +66,23 @@ def real_config(monkeypatch):
 
 def _start(client: TestClient, country: str) -> None:
     client.get("/start", params={"country": country}, follow_redirects=False)
+
+
+def _read_draft(client: TestClient) -> dict:
+    conn = get_connection(_settings.app.db_file)
+    try:
+        return get_draft(conn, client.cookies.get(SESSION_COOKIE_NAME)) or {}
+    finally:
+        conn.close()
+
+
+def _walk_to_vehicle(client: TestClient, category_code: str, period_code: str = "15d") -> None:
+    """Fixed-period AM flow: category + period, then start_date only (the
+    end_date is computed from the period, never submitted)."""
+    _start(client, "AM")
+    client.post("/category-period", data={"category_code": category_code, "period_code": period_code})
+    client.post("/date", data={"start_date": _iso(0)})
+    client.post("/method", data={"choice": "manual"})
 
 
 def _vehicle_data(reg, **overrides):
@@ -85,77 +98,61 @@ def _vehicle_data(reg, **overrides):
 
 
 # ---------------------------------------------------------------------------
-# Control prices: GE's own 15d/30d price is each category's reference point,
-# copied literally, no markup. Same formula/rounding as passenger_car.
+# Prices: AM's own literal pricing.AM values, per category and period.
 # ---------------------------------------------------------------------------
 
-_CONTROL_PRICES_RUB = {
-    "passenger_car": {10: 1082, 15: 1349, 30: 2149, 45: 2949, 90: 5349, 180: 10149, 365: 20016},
-    "motorcycle": {10: 896, 15: 1059, 30: 1549, 45: 2039, 90: 3509, 180: 6449, 365: 12492},
-    "trailer": {10: 716, 15: 849, 30: 1249, 45: 1649, 90: 2849, 180: 5249, 365: 10182},
-    "bus": {10: 1599, 15: 1999, 30: 3199, 45: 4399, 90: 7999, 180: 15199, 365: 29999},
-    "truck": {10: 2166, 15: 2699, 30: 4299, 45: 5899, 90: 10699, 180: 20299, 365: 40032},
-    "special_vehicle": {10: 1082, 15: 1349, 30: 2149, 45: 2949, 90: 5349, 180: 10149, 365: 20016},
+_AM_PRICES_RUB = {
+    "passenger_car": {"15d": 1399, "30d": 2299, "90d": 3999},
+    "motorcycle": {"15d": 1099, "30d": 1599, "90d": 2999},
+    "bus": {"15d": 2199, "30d": 3399, "90d": 6499},
+    "truck": {"15d": 2899, "30d": 4599, "90d": 7699},
+    "trailer": {"15d": 899, "30d": 1299, "90d": 1999},
+    "special_vehicle": {"15d": 1349, "30d": 2149, "90d": 3649},
 }
 
 
+@pytest.mark.parametrize("category_code", list(_AM_PRICES_RUB))
+def test_am_api_periods_returns_am_prices_per_category(real_config, category_code):
+    client = TestClient(app)
+    _start(client, "AM")
+    response = client.get("/api/periods", params={"category_code": category_code})
+    assert response.status_code == 200
+    periods = {p["code"]: p["price_rub"] for p in response.json()}
+    assert periods == _AM_PRICES_RUB[category_code]
+
+
 @pytest.mark.parametrize(
-    "category_code,duration_days,expected_rub",
+    "category_code,period_code,expected_rub",
     [
-        (category, duration_days, expected_rub)
-        for category, prices in _CONTROL_PRICES_RUB.items()
-        for duration_days, expected_rub in prices.items()
+        (category, period_code, price_rub)
+        for category, prices in _AM_PRICES_RUB.items()
+        for period_code, price_rub in prices.items()
     ],
 )
-def test_am_category_control_prices_exact(real_config, category_code, duration_days, expected_rub):
-    price_minor = resolve_duration_price(get_settings(), "AM", category_code, duration_days)
-    assert price_minor == expected_rub * 100
-
-
-@pytest.mark.parametrize("category_code", ["motorcycle", "bus", "truck", "trailer", "special_vehicle"])
-def test_am_category_15d_and_30d_match_ge_literally(real_config, category_code):
-    """The whole point of Option B: AM's reference prices ARE Georgia's own
-    15d/30d prices for the category, not a markup on them."""
-    from app.pricing.provider import available_periods
-
-    ge_periods = {p.code: p.price_rub for p in available_periods(get_settings(), "GE", category_code)}
-    assert resolve_duration_price(get_settings(), "AM", category_code, 15) == ge_periods["15d"] * 100
-    assert resolve_duration_price(get_settings(), "AM", category_code, 30) == ge_periods["30d"] * 100
-
-
-@pytest.mark.parametrize("category_code", ["motorcycle", "bus", "truck", "trailer", "special_vehicle"])
-def test_am_category_enabled_and_reaches_date_step(real_config, category_code):
+def test_am_category_period_selection_stores_am_price(real_config, category_code, period_code, expected_rub):
     client = TestClient(app)
     _start(client, "AM")
     response = client.post(
-        "/category-period", data={"category_code": category_code, "period_code": ""}, follow_redirects=False
+        "/category-period", data={"category_code": category_code, "period_code": period_code}, follow_redirects=False
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/date"
+    draft = _read_draft(client)
+    assert draft["period_code"] == period_code
+    assert draft["price_customer_minor"] == expected_rub * 100
 
 
 @pytest.mark.parametrize("category_code", ["motorcycle", "bus", "truck", "trailer", "special_vehicle"])
-def test_am_category_boundaries_still_10_to_365(real_config, category_code):
+def test_am_category_end_date_computed_from_period(real_config, category_code):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": category_code, "period_code": ""})
-
-    below_min = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(9)})
-    assert below_min.status_code == 422
-
-    accepted = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(10)}, follow_redirects=False)
-    assert accepted.status_code == 303
-
-    client2 = TestClient(app)
-    _start(client2, "AM")
-    client2.post("/category-period", data={"category_code": category_code, "period_code": ""})
-    accepted_max = client2.post(
-        "/date", data={"start_date": _iso(0), "end_date": _iso(365)}, follow_redirects=False
-    )
-    assert accepted_max.status_code == 303
-
-    above_max = client2.post("/date", data={"start_date": _iso(0), "end_date": _iso(366)})
-    assert above_max.status_code == 422
+    client.post("/category-period", data={"category_code": category_code, "period_code": "90d"})
+    response = client.post("/date", data={"start_date": _iso(0)}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/method"
+    draft = _read_draft(client)
+    assert draft["start_date"] == _iso(0)
+    assert draft["end_date"] == _iso(90)
 
 
 # ---------------------------------------------------------------------------
@@ -165,10 +162,7 @@ def test_am_category_boundaries_still_10_to_365(real_config, category_code):
 
 def test_am_trailer_vehicle_form_does_not_show_engine_power(real_config):
     client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "trailer", "period_code": ""})
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(15)})
-    client.post("/method", data={"choice": "manual"})
+    _walk_to_vehicle(client, "trailer")
     response = client.get("/vehicle")
     assert response.status_code == 200
     assert 'name="engine_power"' not in response.text
@@ -179,10 +173,7 @@ def test_am_trailer_order_creation_does_not_require_engine_power(real_config):
     from policyholder_helpers import valid_policyholder_data
 
     client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "trailer", "period_code": ""})
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(15)})
-    client.post("/method", data={"choice": "manual"})
+    _walk_to_vehicle(client, "trailer")
     response = client.post("/vehicle", data=_vehicle_data("AMTRAILER1"), follow_redirects=False)
     assert response.status_code == 303  # no engine_power submitted, still accepted
 
@@ -199,21 +190,19 @@ def test_am_trailer_order_creation_does_not_require_engine_power(real_config):
         conn.close()
     assert order.vehicle_category_code == "trailer"
     assert order.engine_power is None
-    assert order.price_customer_minor == 84900  # 15d trailer = 849 RUB
+    assert order.period_code == "15d"
+    assert order.price_customer_minor == 89900  # AM 15d trailer = 899 RUB
 
     summary = client.get(f"/o/{resume_token}/summary")
     assert summary.status_code == 200
     assert "Мощность двигателя" not in summary.text
-    assert "849" in summary.text
+    assert "899" in summary.text
 
 
 @pytest.mark.parametrize("category_code", ["passenger_car", "motorcycle", "bus", "truck", "special_vehicle"])
 def test_am_non_trailer_categories_still_show_and_require_engine_power(real_config, category_code):
     client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": category_code, "period_code": ""})
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(15)})
-    client.post("/method", data={"choice": "manual"})
+    _walk_to_vehicle(client, category_code)
 
     form_response = client.get("/vehicle")
     assert 'name="engine_power"' in form_response.text
@@ -229,10 +218,7 @@ def test_am_trailer_edit_vehicle_also_omits_engine_power(real_config):
     from policyholder_helpers import valid_policyholder_data
 
     client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "trailer", "period_code": ""})
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(15)})
-    client.post("/method", data={"choice": "manual"})
+    _walk_to_vehicle(client, "trailer")
     client.post("/vehicle", data=_vehicle_data("AMTRLEDIT1"))
     response = client.post(
         "/policyholder", data=valid_policyholder_data(contact_telegram="@am_trailer_edit"), follow_redirects=False
@@ -255,9 +241,9 @@ def test_am_motorcycle_full_flow_order_summary_and_payment(real_config):
 
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "motorcycle", "period_code": ""})
+    client.post("/category-period", data={"category_code": "motorcycle", "period_code": "30d"})
 
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(30)}, follow_redirects=False)
+    response = client.post("/date", data={"start_date": _iso(0)}, follow_redirects=False)
     assert response.status_code == 303
 
     client.post("/method", data={"choice": "manual"})
@@ -275,19 +261,20 @@ def test_am_motorcycle_full_flow_order_summary_and_payment(real_config):
         conn.close()
     assert order.country_code == "AM"
     assert order.vehicle_category_code == "motorcycle"
-    assert order.period_code is None
+    assert order.period_code == "30d"
+    assert order.end_date.isoformat() == _iso(30)
     assert order.engine_power == 40
-    assert order.price_customer_minor == 154900  # 30d motorcycle = 1549 RUB
+    assert order.price_customer_minor == 159900  # AM 30d motorcycle = 1599 RUB
 
     summary = client.get(f"/o/{resume_token}/summary")
     assert summary.status_code == 200
-    assert "1 549" in summary.text
+    assert "1 599" in summary.text
     assert "30 дней" in summary.text
 
     client.post(f"/o/{resume_token}/summary", data={"action": "pay"})
     payment = client.get(f"/o/{resume_token}/payment")
     assert payment.status_code == 200
-    assert "1 549" in payment.text
+    assert "1 599" in payment.text
 
 
 # ---------------------------------------------------------------------------

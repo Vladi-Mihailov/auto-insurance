@@ -11,10 +11,8 @@ ever exist here.
 Country-scoped by the CALLING BOT's own profile.country_code -- a bot
 profiled for one country edits that country's overrides, and never sees or
 touches another country's rows (insurance_price_overrides.country_code, see
-app.pricing.overrides). AM has no override-table support at all (it derives
-its own linear pricing from config.yaml's duration_ranges.AM, a different
-pricing shape entirely -- see app.pricing.provider.resolve_duration_price);
-a bot profiled for AM would simply have nothing to edit here.
+app.pricing.overrides). No bot is profiled for AM today; its prices are
+edited on the website's /admin/prices?country=AM through the same service.
 
 Category availability/labels shown are this bot's own (see
 app.telegram_bot.categories) -- NOT the country-level website list -- so a

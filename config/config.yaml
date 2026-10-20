@@ -218,6 +218,78 @@ pricing:
         label: "90 дней"
         price_tl: null
 
+  # Armenia: FIXED periods, same shape as Georgia (business decision
+  # 2026-10-20 -- replaces the former 10-365 day exact-date-range product
+  # and its linear per-day formula). Initial prices are a ONE-TIME SNAPSHOT
+  # of Georgia's customer-facing EFFECTIVE prices in production on
+  # 2026-10-20 (GE config base + GE admin overrides at that moment), copied
+  # here as literal values. They are NOT linked to pricing.GE or to GE
+  # overrides in any way: changing Georgia's prices later never changes
+  # Armenia's, and vice versa. Runtime edits go through /admin/prices?country=AM
+  # (insurance_price_overrides with country_code AM); "reset" returns to the
+  # values below.
+  AM:
+    passenger_car:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 1399
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 2299
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 3999
+    motorcycle:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 1099
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 1599
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 2999
+    bus:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 2199
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 3399
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 6499
+    truck:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 2899
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 4599
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 7699
+    trailer:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 899
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 1299
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 1999
+    special_vehicle:
+      - code: "15d"
+        label: "15 дней"
+        price_rub: 1349
+      - code: "30d"
+        label: "30 дней"
+        price_rub: 2149
+      - code: "90d"
+        label: "90 дней"
+        price_rub: 3649
+
 # Turkey-only TL->RUB conversion for pricing.TR's price_tl periods above --
 # see app.settings.TrTlConversionConfig and
 # app.pricing.provider.available_periods (which additionally requires
@@ -239,103 +311,20 @@ tr_tl_conversion:
 # open for the four categories with a confirmed source tariff (business
 # confirmed 2026-09-06); bus/trailer stay excluded until a source tariff for
 # them is confirmed -- see pricing.TR's own comment above. AM is open for
-# all six categories (business confirmed 2026-09-06 that Armenia's tariff
-# grid is literally Georgia's own, per category -- see duration_ranges.AM
-# below). Add more codes here later; no checkout/route code changes needed.
+# all six categories (see pricing.AM above). Add more codes here later; no
+# checkout/route code changes needed.
 catalog:
   enabled_category_codes_by_country:
     AM: ["passenger_car", "motorcycle", "bus", "truck", "trailer", "special_vehicle"]
     TR: ["passenger_car", "motorcycle", "truck", "special_vehicle"]
 
-# country -> vehicle_category_code -> {min_days, max_days} -- EXACT DATE
-# RANGE products (currently only Armenia's foreign-vehicle CMTPL, per the
-# gap-analysis report: 10-day minimum, confirmed by law HO-63-N Art. 6.2 +
-# Nairi Insurance + the State Revenue Committee's border guide; 365-day
-# maximum, same ceiling as domestic policies -- same for every category,
-# not category-specific). A (country, category) pair here must NOT also
-# appear under pricing.<country>.<category> above -- it's one product model
-# or the other, never both (see app.pricing.provider.get_duration_range,
-# checked before available_periods everywhere this matters).
-#
-# pricing (linear daily price + percent discount): business confirmed on
-# 2026-09-06 that Armenia's tariff grid is LITERALLY Georgia's own tariff
-# grid for the corresponding category -- reference_price_rub_1/2 below are
-# copied directly from this same file's pricing.GE.<category> 15d/30d
-# entries, no markup, no separate AM business data. Two reference points
-# define a straight RUB-per-day line, applied across the FULL 10-365 day
-# range -- every individual day count is computed from the formula, never
-# bucketed into brackets, and days outside 15-30 are intentionally
-# extrapolated, not rejected. See app.pricing.provider.resolve_duration_price
-# for the exact rounding order (base price rounded first, then discount
-# applied and rounded again; ROUND_HALF_UP; Decimal/Fraction only, never
-# float). discount_percent: 0 means no discount is currently active.
-# default_duration_days pre-fills end_date on the FIRST view of a fresh
-# /date draft only (start_date + this many days) -- see
-# app.web.checkout_routes.get_date_step. Never overwrites dates a customer
-# already chose, and has no bearing on the min_days/max_days validation
-# above, which stays enforced exactly as before regardless of this default.
-duration_ranges:
-  AM:
-    passenger_car:
-      min_days: 10
-      max_days: 365
-      default_duration_days: 15
-      pricing:
-        reference_days_1: 15
-        reference_price_rub_1: 1349
-        reference_days_2: 30
-        reference_price_rub_2: 2149
-    motorcycle:
-      min_days: 10
-      max_days: 365
-      default_duration_days: 15
-      pricing:
-        reference_days_1: 15
-        reference_price_rub_1: 1059
-        reference_days_2: 30
-        reference_price_rub_2: 1549
-    bus:
-      min_days: 10
-      max_days: 365
-      default_duration_days: 15
-      pricing:
-        reference_days_1: 15
-        reference_price_rub_1: 1999
-        reference_days_2: 30
-        reference_price_rub_2: 3199
-    truck:
-      min_days: 10
-      max_days: 365
-      default_duration_days: 15
-      pricing:
-        reference_days_1: 15
-        reference_price_rub_1: 2699
-        reference_days_2: 30
-        reference_price_rub_2: 4299
-    trailer:
-      min_days: 10
-      max_days: 365
-      default_duration_days: 15
-      pricing:
-        reference_days_1: 15
-        reference_price_rub_1: 849
-        reference_days_2: 30
-        reference_price_rub_2: 1249
-    # special_vehicle's reference prices happen to equal passenger_car's --
-    # GE's own config for this category carries the identical note: a
-    # coincidence in the confirmed business tariffs, not a
-    # formula/reference/multiplier tied to passenger_car. Kept as its own
-    # independent block for that reason, not an alias.
-    special_vehicle:
-      min_days: 10
-      max_days: 365
-      default_duration_days: 15
-      pricing:
-        reference_days_1: 15
-        reference_price_rub_1: 1349
-        reference_days_2: 30
-        reference_price_rub_2: 2149
-        discount_percent: 0
+# country -> vehicle_category_code -> EXACT DATE RANGE product (min_days/
+# max_days + linear per-day pricing, see app.pricing.provider.
+# get_duration_range/resolve_duration_price). No country uses this any more:
+# Armenia moved to fixed periods (pricing.AM above) on 2026-10-20 so it shares
+# the admin-editable override pricing with GE/TR. Historical AM orders keep
+# their stored start/end dates and price_customer_minor untouched.
+duration_ranges: {}
 
 # Telegram sales-bot identities (app.telegram_bot) -- non-secret branding
 # only. The key is the bot_key: selected at runtime by TELEGRAM_BOT_KEY and

@@ -36,7 +36,7 @@ def test_available_periods_unpriced_period_is_not_priced():
 
 
 def test_available_periods_unknown_country_is_empty():
-    assert available_periods(_settings(), "AM", "passenger_car") == []
+    assert available_periods(_settings(), "XX", "passenger_car") == []
 
 
 def test_available_periods_unknown_category_is_empty():

@@ -1,6 +1,10 @@
 """Drains app.notifications.bot_outbox -- the ONLY place Telegram sends for
 manager cards, manager files and customer payment notices happen.
 
+Manager files go one per message (never a media group): each is its own
+outbox job, so a failed document is retried alone and the ones already
+delivered are never re-sent.
+
 Called right after an action (so delivery is immediate) and from a
 background loop in the bot process (retries with backoff, and jobs enqueued
 by the web admin). Each job re-reads the order from the DB and renders the
@@ -143,10 +147,13 @@ class OutboxWorker:
             if pending_card:
                 raise _Postpone()
         caption_key = "extra_receipt" if job.payload.get("extra") else file.kind
+        same_kind = [f.id for f in order_files.list_files(conn, order.id, file.kind)]
         caption = texts.MGR_FILE_CAPTIONS.get(caption_key, "{number}").format(
             number=order.public_number,
             amount=texts.format_rub(order.price_customer_minor // 100),
             name=order.full_name or "—",
+            index=same_kind.index(file.id) + 1 if file.id in same_kind else 1,
+            total=len(same_kind) or 1,
         )
         reply = ReplyParameters(message_id=card.message_id, allow_sending_without_reply=True) if card else None
         if file.telegram_media_type == "photo":

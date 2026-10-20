@@ -62,17 +62,18 @@ def attach_documents(ctx: Ctx, order: Order, draft: dict) -> None:
         )
 
 
-def _finalize(ctx: Ctx, order: Order, draft: dict) -> Order:
+def _finalize(ctx: Ctx, order: Order, draft: dict) -> tuple[Order, list[int]]:
     """Every step here is idempotent, so running it again after a crash or
-    a replay is harmless."""
+    a replay is harmless. Returns the order and the staff-notification
+    outbox jobs (application card + documents) to deliver."""
     attach_documents(ctx, order, draft)
-    order = mark_awaiting_payment(ctx.conn, order.id, note="telegram checkout confirmed").order
+    action = mark_awaiting_payment(ctx.conn, order.id, note="telegram checkout confirmed", manager_ids=ctx.manager_ids)
     # The draft now only points at the order (plus who the customer is and
     # where they came from) -- the business data lives on the order. A new
     # checkout generation, so nothing still in flight for the checkout can
     # write into the draft any more.
-    reset_checkout(ctx, order_id=order.id)
-    return order
+    reset_checkout(ctx, order_id=action.order.id)
+    return action.order, action.outbox_job_ids
 
 
 def create_order_record(ctx: Ctx, draft: dict, checkout_id: str, *, operator: bool = False) -> tuple[Order | None, bool]:
@@ -128,12 +129,13 @@ def create_order_record(ctx: Ctx, draft: dict, checkout_id: str, *, operator: bo
         return None, False
 
 
-def create_or_resume_order(ctx: Ctx) -> tuple[Order | None, bool]:
-    """(order, created_now). (None, False) when the draft can't be ordered."""
+def create_or_resume_order(ctx: Ctx) -> tuple[Order | None, bool, list[int]]:
+    """(order, created_now, staff outbox job ids to deliver). (None, False,
+    []) when the draft can't be ordered."""
     draft = ctx.draft()
     existing = order_views.customer_order(ctx.conn, ctx.profile, ctx.user_id, draft.get("order_id"))
     if existing is not None:
-        return existing, False
+        return existing, False, []
 
     checkout_id = draft.get("checkout_id")
     if not checkout_id:
@@ -142,8 +144,9 @@ def create_or_resume_order(ctx: Ctx) -> tuple[Order | None, bool]:
 
     order, created = create_order_record(ctx, draft, checkout_id)
     if order is None:
-        return None, False
-    return _finalize(ctx, order, ctx.draft()), created
+        return None, False, []
+    order, job_ids = _finalize(ctx, order, ctx.draft())
+    return order, created, job_ids
 
 
 async def on_review_confirmed(callback: CallbackQuery, state: FSMContext, ctx: Ctx):
@@ -171,7 +174,7 @@ async def on_review_confirmed(callback: CallbackQuery, state: FSMContext, ctx: C
             await go(callback, state, ctx, "resume")  # the first missing/invalid step; it returns to the review
             await callback.answer()
             return
-    order, created = create_or_resume_order(ctx)
+    order, created, job_ids = create_or_resume_order(ctx)
     if order is None:
         await go(callback, state, ctx, "resume", notice=texts.ORDER_CREATE_FAILED)
         await callback.answer()
@@ -180,6 +183,10 @@ async def on_review_confirmed(callback: CallbackQuery, state: FSMContext, ctx: C
         _order_event(ctx, "bot_order_created", order)
     await go(callback, state, ctx, "order")
     await callback.answer()
+    # Staff notification AFTER the customer already sees their order: a
+    # Telegram failure here only leaves the jobs queued for the outbox retry
+    # loop (app.telegram_bot.outbox never raises), never breaks checkout.
+    await ctx.deliver(job_ids)
 
 
 async def on_order_action(callback: CallbackQuery, callback_data: OrderCb, state: FSMContext, ctx: Ctx):

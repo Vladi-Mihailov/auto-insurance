@@ -47,7 +47,7 @@ def _iso(offset_days: int) -> str:
 @pytest.fixture
 def real_config(monkeypatch):
     """AM/TR pricing lives in the REAL config/config.yaml, not the test
-    fixture -- same fixture shape as tests/test_am_linear_pricing.py."""
+    fixture -- same fixture shape as tests/test_am_fixed_period_pricing.py."""
     monkeypatch.delenv("INSURANCE_CONFIG_FILE", raising=False)
     get_settings.cache_clear()
     yield
@@ -90,8 +90,8 @@ def test_ge_summary_title_is_osago_gruzii():
 def test_am_summary_title_is_osago_armenii(real_config):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(30)})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
+    client.post("/date", data={"start_date": _iso(0)})
     client.post("/method", data={"choice": "manual"})
     client.post("/vehicle", data=_vehicle_data("TITLEAM1", engine_power="150"))
     response = client.post(

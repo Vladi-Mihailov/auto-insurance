@@ -107,8 +107,8 @@ def _upload(client: TestClient):
 
 def _reach_am_documents_upload(client: TestClient) -> None:
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    client.post("/date", data={"start_date": _START.isoformat(), "end_date": (_START + timedelta(days=10)).isoformat()})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
+    client.post("/date", data={"start_date": _START.isoformat()})
     client.post("/method", data={"choice": "documents"})
 
 

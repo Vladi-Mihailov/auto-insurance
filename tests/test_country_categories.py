@@ -116,17 +116,14 @@ def test_am_category_period_screen_shows_all_six_categories(real_config):
 
 
 def test_am_passenger_car_clears_the_category_check(real_config):
-    """passenger_car is enabled for AM -- and, as of Step 3, AM's
-    passenger_car is an EXACT DATE RANGE product (see
-    app.pricing.provider.get_duration_range), so a valid category is now a
-    COMPLETE /category-period submission on its own (no period_code to
-    reject or accept) -- straight through to /date, never a category
-    error. This supersedes Step 2's own version of this test, written
-    before AM had a period/date model at all."""
+    """passenger_car is enabled for AM -- a valid category plus one of
+    AM's own fixed periods (AM moved from an exact date range to fixed
+    15d/30d/90d periods on 2026-10-20) goes straight through to /date,
+    never a category error."""
     client = TestClient(app)
     _start(client, "AM")
     response = client.post(
-        "/category-period", data={"category_code": "passenger_car", "period_code": ""}, follow_redirects=False
+        "/category-period", data={"category_code": "passenger_car", "period_code": "15d"}, follow_redirects=False
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/date"
@@ -139,7 +136,7 @@ def test_am_truck_category_is_now_accepted(real_config):
     client = TestClient(app)
     _start(client, "AM")
     response = client.post(
-        "/category-period", data={"category_code": "truck", "period_code": ""}, follow_redirects=False
+        "/category-period", data={"category_code": "truck", "period_code": "15d"}, follow_redirects=False
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/date"
@@ -250,15 +247,17 @@ def test_tr_never_shows_ge_categories_beyond_its_own_allowlist(real_config):
     assert "Автобус" not in response.text  # bus -- same
 
 
-def test_am_api_periods_is_empty_not_500_and_not_ge_prices(real_config):
-    """No priced periods exist for AM yet -- the endpoint must return an
-    empty list, never a 500/KeyError, and must never silently return
+def test_am_api_periods_returns_am_own_prices_not_ge_prices(real_config):
+    """AM is a fixed-period product with its own literal pricing.AM prices
+    (since 2026-10-20) -- the endpoint must return those, never silently
     Georgia's real 15d/30d/90d prices."""
     client = TestClient(app)
     _start(client, "AM")
     response = client.get("/api/periods", params={"category_code": "passenger_car"})
     assert response.status_code == 200
-    assert response.json() == []
+    periods = {p["code"]: p["price_rub"] for p in response.json()}
+    assert periods == {"15d": 1399, "30d": 2299, "90d": 3999}
+    assert periods != {"15d": 1349, "30d": 2149, "90d": 3649}  # GE passenger_car
 
 
 def test_tr_config_has_all_five_passenger_car_periods_all_priced(real_config):
@@ -314,16 +313,19 @@ def test_tr_api_periods_for_motorcycle_has_no_45d(real_config):
     assert "45d" not in codes
 
 
-def test_am_category_period_get_screen_renders_without_error_and_shows_no_priced_period(real_config):
-    """The screen itself (not just the API) must render safely for a
-    country with no pricing at all yet -- no 500/KeyError, and the one
-    enabled category shows as "coming soon", never a Georgia price."""
+def test_am_category_period_get_screen_shows_am_priced_periods(real_config):
+    """The screen itself (not just the API) shows AM's own priced
+    passenger_car periods, never a Georgia price."""
     client = TestClient(app)
     _start(client, "AM")
     response = client.get("/category-period")
     assert response.status_code == 200
-    assert "Цена уточняется" not in response.text  # AM has no period rows at all, not even unpriced ones
-    assert "₽" not in response.text
+    for code in ("15d", "30d", "90d"):
+        assert f'data-period-code="{code}"' in response.text
+    for price_text in ("1 399", "2 299", "3 999"):
+        assert price_text in response.text
+    assert "3 649" not in response.text  # GE passenger_car 90d
+    assert "Цена уточняется" not in response.text
 
 
 # ---------------------------------------------------------------------------

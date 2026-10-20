@@ -18,7 +18,7 @@ from app.orders.payment import mark_awaiting_payment
 from app.orders.repository import get_order_by_id
 from app.orders.state_machine import OrderStatus
 from app.settings import Settings
-from app.telegram_bot import texts
+from app.telegram_bot import staff, texts
 from app.telegram_bot.keyboards import OrderCb, keyboard
 from app.telegram_bot.profile import BotProfile
 
@@ -48,7 +48,11 @@ def customer_order(conn: sqlite3.Connection, profile: BotProfile, telegram_user_
     if order.status == OrderStatus.DATA_COMPLETED.value:
         # Only possible if the bot stopped between creating the order and
         # moving it on; finish that step now.
-        order = mark_awaiting_payment(conn, order.id, note="telegram checkout resumed").order
+        # The staff notification is queued (not sent inline); the bot's
+        # outbox loop delivers it.
+        order = mark_awaiting_payment(
+            conn, order.id, note="telegram checkout resumed", manager_ids=staff.active_ids(conn, profile.bot_key)
+        ).order
     return order
 
 

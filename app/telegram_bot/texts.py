@@ -293,6 +293,11 @@ NEW_PURCHASE_NOT_ALLOWED = "Сначала завершите оплату те�
 ORDER_CREATE_FAILED = "Не удалось оформить заказ — проверьте данные и попробуйте ещё раз."
 
 MGR_TITLE_REVIEW = "🆕 Новая заявка {number}"
+# Sent when the customer submits the application, before any payment: an
+# AWAITING_PAYMENT order with no receipt yet (one WITH receipts is back to
+# awaiting payment after "Оплата не найдена" -- MGR_STATUS below).
+MGR_TITLE_APPLICATION = "📝 Новая заявка {number} — ожидает оплаты"
+MGR_STATUS_APPLICATION = "🕓 Заявка оформлена — ждём оплату и чек от клиента"
 MGR_TITLE = "Заявка {number}"
 MGR_STATUS = {
     "payment_review": "⏳ Ожидает проверки оплаты",
@@ -321,7 +326,10 @@ MGR_POLICY_SEND_FAILED = (
     "нажмите «🔁 Отправить полис повторно» позже."
 )
 MGR_FILE_CAPTIONS = {
-    "vehicle_document": "🚗 Документ ТС · {number}",
+    # The customer's issuance photos (both sides of the vehicle registration
+    # certificate + the passport photo page) arrive as one unlabelled batch
+    # -- which photo is which is never stored, so they are numbered, not named.
+    "vehicle_document": "📎 {number}\nДокумент клиента {index} из {total} (техпаспорт / паспорт)",
     "payment_receipt": "🧾 Чек об оплате · {number}\nОжидается: {amount} ₽ · {name}",
     "extra_receipt": "🧾 Дополнительный чек · {number}\nОжидается: {amount} ₽ · {name}",
 }

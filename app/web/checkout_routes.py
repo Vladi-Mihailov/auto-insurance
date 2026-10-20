@@ -1311,15 +1311,9 @@ def get_edit_coverage(
     order: Order = Depends(get_order_or_404),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    # NOT extended to EXACT DATE RANGE products (AM) in this step -- no real
-    # AM order can exist yet (see post_policyholder's price guard), so this
-    # only ever renders for a FIXED-period order today. It still renders
-    # safely (never a crash) if that changes: an AM order's
-    # available_periods() is simply empty, same "скоро будет доступна"
-    # message the template already shows for any category with no periods
-    # configured -- not the ideal message for a duration-range product, but
-    # not a bug either. Editing an AM order's category/duration is future
-    # work, not this step's.
+    # Every country is fixed-period now; a legacy AM order (period_code
+    # None, from before 2026-10-20) lands here from edit-date and simply
+    # picks a period like any other order.
     settings = get_settings()
     categories = catalog_repo.list_categories(
         conn, allowed_codes=_allowed_category_codes(settings, order.country_code)
@@ -1404,6 +1398,11 @@ def get_edit_date(
 ):
     settings = get_settings()
     duration_range = _duration_range(settings, order.country_code, order.vehicle_category_code)
+    if duration_range is None and not order.period_code:
+        # A fixed-period order with no period -- an Armenian order created
+        # while AM was still an exact-date-range product. Its end date can
+        # only follow from a period now, so the customer picks one first.
+        return _redirect(f"/o/{order.resume_token}/edit-coverage")
     if duration_range is None:
         return render(
             request,
@@ -1452,6 +1451,8 @@ def post_edit_date(
     duration_range = _duration_range(settings, order.country_code, order.vehicle_category_code)
     today = today_in_georgia()
 
+    if duration_range is None and not order.period_code:
+        return _redirect(f"/o/{resume_token}/edit-coverage")  # see get_edit_date
     if duration_range is None:
         parsed_start, error = _parse_and_validate_start_date(start_date, today)
         if error:

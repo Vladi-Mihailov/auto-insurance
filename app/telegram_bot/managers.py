@@ -95,7 +95,17 @@ def card_text(conn: sqlite3.Connection, settings: Settings, order: Order) -> str
         row = catalog_repo.get_category_by_code(conn, order.vehicle_category_code) if order.vehicle_category_code else None
         category = row.name if row else order.vehicle_category_code
     period = get_period(settings, order.country_code, order.vehicle_category_code, order.period_code) if order.period_code else None
-    title = texts.MGR_TITLE_REVIEW if order.status == OrderStatus.PAYMENT_REVIEW.value else texts.MGR_TITLE
+    fresh_application = (
+        order.status == OrderStatus.AWAITING_PAYMENT.value
+        and not order.is_operator_order
+        and not order_files.list_files(conn, order.id, order_files.KIND_PAYMENT_RECEIPT)
+    )
+    if order.status == OrderStatus.PAYMENT_REVIEW.value:
+        title = texts.MGR_TITLE_REVIEW
+    elif fresh_application:
+        title = texts.MGR_TITLE_APPLICATION
+    else:
+        title = texts.MGR_TITLE
     client = f"@{order.telegram_username} · " if order.telegram_username else ""
     vin = order.identifier if order.identifier_type == "vin" else "—"
     chassis = order.identifier if order.identifier_type == "chassis" else "—"
@@ -128,7 +138,7 @@ def card_text(conn: sqlite3.Connection, settings: Settings, order: Order) -> str
         order.acquisition_source or "—",
         "",
         "Статус:",
-        texts.MGR_STATUS.get(order.status, order.status),
+        texts.MGR_STATUS_APPLICATION if fresh_application else texts.MGR_STATUS.get(order.status, order.status),
     ]
     return "\n".join(lines)
 

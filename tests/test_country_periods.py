@@ -1,20 +1,16 @@
 """Step 3 of the GE/AM/TR rollout: country-aware period/date model.
 
-GE: fixed periods, unchanged. TR: fixed periods (30/45/90/180/365d), real
-AVAILABILITY but deliberately no price yet (see config.yaml's
-pricing.TR.passenger_car -- price_rub: null everywhere), so TR cannot
-complete a real /category-period submission through the UI either (blocked
-on the existing "not priced yet" check, same as GE would be if a period
-were ever unpriced). AM: EXACT DATE RANGE (10-365 days) -- no period_code,
-no price at all yet (see app.web.checkout_routes.post_policyholder's price
-guard) -- so AM ALSO cannot reach order creation in this step.
+GE: fixed periods (15/30/90d), unchanged. TR: fixed periods
+(30/45/90/180/365d), TL-based pricing. AM: originally an EXACT DATE RANGE
+product (10-365 days, no period_code); since 2026-10-20 a FIXED-period
+product exactly like Georgia (15/30/90d, its own literal pricing.AM prices,
+end_date computed by app.checkout.rules._FIXED_DURATION_DATE_RULES["AM"]).
+Armenian orders created before that switch still exist with
+period_code=None -- see the legacy-order section at the bottom.
 
-Because neither AM nor TR can complete a full order yet (by design -- see
-the Step 3 report's price-blocker section), several tests here seed the
-pre-order draft directly (via merge_draft) to exercise /date's date-rule
-dispatch in isolation, the same technique tests/test_country_routing.py
-already used to verify country_code reaches Order creation without needing
-real AM/TR pricing.
+Several tests here seed the pre-order draft directly (via merge_draft) to
+exercise /date's date-rule dispatch in isolation, the same technique
+tests/test_country_routing.py uses.
 
 All dates are computed relative to today_in_georgia() rather than hardcoded
 literals -- this session's own established time-bomb lesson (see
@@ -131,112 +127,90 @@ def test_ge_full_flow_still_reaches_date_step_with_computed_end_date():
 
 
 # ---------------------------------------------------------------------------
-# Armenia: EXACT DATE RANGE (10-365 days), no fixed period
+# Armenia: FIXED period (15/30/90d), its own pricing.AM prices
 # ---------------------------------------------------------------------------
 
 
-def test_am_category_period_screen_has_no_period_grid(real_config):
+def test_am_category_period_screen_shows_the_period_grid_with_am_prices(real_config):
     client = TestClient(app)
     _start(client, "AM")
     response = client.get("/category-period")
     assert response.status_code == 200
-    assert 'id="period-grid"' not in response.text
-    assert "на следующем шаге" in response.text
+    assert 'id="period-grid"' in response.text
+    assert "на следующем шаге" not in response.text  # the old duration-range hint
+    for price_text in ("1 399", "2 299", "3 999"):
+        assert price_text in response.text
 
 
-def test_am_date_screen_shows_both_start_and_end_inputs(real_config):
+def test_am_api_periods_returns_am_prices(real_config):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
+    response = client.get("/api/periods", params={"category_code": "passenger_car"})
+    assert response.status_code == 200
+    periods = {p["code"]: p for p in response.json()}
+    assert {code: p["price_rub"] for code, p in periods.items()} == {"15d": 1399, "30d": 2299, "90d": 3999}
+    assert all(p["is_priced"] for p in periods.values())
+
+
+def test_am_date_screen_has_no_end_date_input(real_config):
+    client = TestClient(app)
+    _start(client, "AM")
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
     response = client.get("/date")
     assert response.status_code == 200
     assert 'name="start_date"' in response.text
-    assert 'name="end_date"' in response.text  # editable, unlike GE/TR's read-only computed display
+    assert 'name="end_date"' not in response.text  # read-only computed display, same as GE/TR
 
 
-def test_am_10_days_accepted_and_period_code_stays_none(real_config):
-    """The report's 10-day semantics example: start/end 10 days apart ->
-    duration_days = (end - start).days = 10, accepted (matches the minimum
-    exactly)."""
+@pytest.mark.parametrize("period_code,duration_days", [("15d", 15), ("30d", 30), ("90d", 90)])
+def test_am_end_date_computed_from_period(real_config, period_code, duration_days):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(10)}, follow_redirects=False)
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": period_code})
+    preview = client.get("/api/date-preview", params={"start": _iso(0)})
+    assert preview.json() == {"end_date": _iso(duration_days)}
+
+    # A submitted end_date (old cached form) is ignored -- the period decides.
+    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(27)}, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/method"
     draft = _read_draft(client)
+    assert draft["period_code"] == period_code
     assert draft["start_date"] == _iso(0)
-    assert draft["end_date"] == _iso(10)
-    assert draft["period_code"] is None  # never a fake code like "10d"/"custom"/"dynamic"
+    assert draft["end_date"] == _iso(duration_days)
 
 
-def test_am_9_days_rejected(real_config):
+def test_new_am_draft_gets_a_period_code_and_price(real_config):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(9)})
-    assert response.status_code == 422
-    assert "Минимальный срок страхования — 10 дней" in response.text
-
-
-def test_am_11_days_accepted(real_config):
-    client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(11)}, follow_redirects=False)
+    response = client.post(
+        "/category-period", data={"category_code": "passenger_car", "period_code": "30d"}, follow_redirects=False
+    )
     assert response.status_code == 303
-
-
-def test_am_arbitrary_27_day_duration_accepted(real_config):
-    """The whole point of EXACT DATE RANGE: 27 is not a period code anyone
-    pre-defined, just a date-range difference."""
-    client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(27)}, follow_redirects=False)
-    assert response.status_code == 303
+    assert response.headers["location"] == "/date"
     draft = _read_draft(client)
-    assert draft["start_date"] == _iso(0)
-    assert draft["end_date"] == _iso(27)
+    assert draft["period_code"] == "30d"
+    assert draft["price_customer_minor"] == 229900
 
 
-def test_am_365_days_accepted(real_config):
+def test_am_empty_period_code_rejected(real_config):
+    """The old duration-range submission (category only, empty period_code)
+    is no longer complete for AM."""
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(365)}, follow_redirects=False)
-    assert response.status_code == 303
-
-
-def test_am_366_days_rejected(real_config):
-    client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    response = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(366)})
+    response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
     assert response.status_code == 422
-    assert "Максимальный срок страхования — 365 дней" in response.text
+    assert _read_draft(client).get("period_code") is None
 
 
 def test_am_start_date_in_the_past_still_rejected_same_as_ge(real_config):
-    """AM start_date >= today uses the exact same
-    _parse_and_validate_start_date GE already relies on -- no new rule."""
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
     yesterday = (today_in_georgia() - timedelta(days=1)).isoformat()
-    day_before = (today_in_georgia() - timedelta(days=2)).isoformat()
-    response = client.post("/date", data={"start_date": day_before, "end_date": yesterday})
+    response = client.post("/date", data={"start_date": yesterday})
     assert response.status_code == 422
     assert "Дата начала не может быть раньше сегодняшнего дня" in response.text
-
-
-def test_am_never_leaks_a_ge_period_code_into_the_draft(real_config):
-    client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})  # ignored input
-    draft = _read_draft(client)
-    assert draft["period_code"] is None
-    assert draft.get("price_customer_minor") is None
 
 
 # ---------------------------------------------------------------------------
@@ -312,15 +286,18 @@ def test_tr_future_start_date_is_not_artificially_blocked(real_config):
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_period_post_cannot_inject_a_ge_period_for_am(real_config):
+@pytest.mark.parametrize("period_code", ["45d", "7d", "not-a-real-code"])
+def test_invalid_period_post_cannot_inject_a_foreign_period_for_am(real_config, period_code):
+    """45d is a TR-only period, 7d exists nowhere -- AM only offers its own
+    15d/30d/90d."""
     client = TestClient(app)
     _start(client, "AM")
-    response = client.post(
-        "/category-period", data={"category_code": "passenger_car", "period_code": "15d"}, follow_redirects=False
-    )
-    assert response.status_code == 303  # category alone is complete for AM -- period_code is simply ignored
+    response = client.post("/category-period", data={"category_code": "passenger_car", "period_code": period_code})
+    assert response.status_code == 422
+    assert "Выберите один из доступных периодов" in response.text
     draft = _read_draft(client)
-    assert draft["period_code"] is None
+    assert draft.get("period_code") is None
+    assert draft.get("price_customer_minor") is None
 
 
 def test_invalid_period_post_cannot_inject_a_ge_period_for_tr(real_config):
@@ -331,15 +308,10 @@ def test_invalid_period_post_cannot_inject_a_ge_period_for_tr(real_config):
     assert "Выберите один из доступных периодов" in response.text
 
 
-def test_am_order_creation_now_succeeds_with_real_linear_pricing(real_config):
-    """AM passenger_car now has real linear pricing (see
-    tests/test_am_linear_pricing.py for the formula's own dedicated
-    coverage) -- the price guard in post_policyholder
-    (draft.get("price_customer_minor") is None) simply stops firing for AM,
-    exactly as documented there; it is not removed or weakened, it just has
-    nothing left to block for this (country, category) pair. Drives the
-    wizard all the way through /vehicle (real manufacturer/model) so
-    post_policyholder's manufacturer/model guard doesn't intercept first."""
+def test_am_order_creation_stores_the_period_price(real_config):
+    """Drives the wizard all the way through /vehicle (real
+    manufacturer/model) so post_policyholder's manufacturer/model guard
+    doesn't intercept first."""
     from policyholder_helpers import valid_policyholder_data
 
     conn = get_connection(_settings.app.db_file)
@@ -350,8 +322,8 @@ def test_am_order_creation_now_succeeds_with_real_linear_pricing(real_config):
 
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(10)})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
+    client.post("/date", data={"start_date": _iso(0)})
     client.post("/method", data={"choice": "manual"})
     client.post(
         "/vehicle",
@@ -376,7 +348,7 @@ def test_am_order_creation_now_succeeds_with_real_linear_pricing(real_config):
         after_count = conn.execute("SELECT COUNT(*) FROM insurance_orders").fetchone()[0]
     finally:
         conn.close()
-    assert after_count == before_count + 1  # order created, with a real price
+    assert after_count == before_count + 1
 
     resume_token = response.headers["location"].split("/")[2]
     from app.orders.repository import get_order_by_token
@@ -386,21 +358,19 @@ def test_am_order_creation_now_succeeds_with_real_linear_pricing(real_config):
         order = get_order_by_token(conn, resume_token)
     finally:
         conn.close()
-    assert order.price_customer_minor == 108200  # 10d = 1082 RUB, see test_am_linear_pricing.py
+    assert order.period_code == "15d"
+    assert order.end_date.isoformat() == _iso(15)
+    assert order.price_customer_minor == 139900  # AM 15d passenger_car = 1399 RUB
 
 
 # ---------------------------------------------------------------------------
-# Future-proofing: resume/summary for a period_code=None order.
-#
-# No real AM order can exist via the checkout UI in this step (see the price
-# guard above), but Order.period_code being NULL-able surfaced two latent
-# bugs while investigating it -- app.web.routes._resume_redirect and
-# get_summary both used to treat ANY period_code-less order as an ancient
-# LEGACY one and bounce it to /o/{token}/period, which has no idea what an
-# EXACT DATE RANGE product is. Both were fixed as part of this step (see the
-# report). These tests build such an order directly via create_order() --
-# bypassing the checkout routes' own price guard entirely, exactly as if
-# AM pricing already existed -- purely to prove the fix isn't dead code.
+# Legacy AM orders: created while AM was still an EXACT DATE RANGE product,
+# so they carry period_code=None plus explicit start/end dates. They must
+# keep resuming to the summary (never the legacy /o/{token}/period screen),
+# keep showing their stored price and duration in days, and their edit-date
+# screen now sends the customer to edit-coverage to pick a real AM period
+# first (their end date can only follow from a period now). Built directly
+# via create_order(), since the checkout can no longer produce one.
 # ---------------------------------------------------------------------------
 
 
@@ -411,7 +381,7 @@ def _create_am_order_directly(*, price_customer_minor: int) -> str:
     try:
         order = create_order(
             conn,
-            session_id="am-future-proofing-test",
+            session_id="am-legacy-order-test",
             country_code="AM",
             vehicle_category_code="passenger_car",
             period_code=None,
@@ -450,13 +420,50 @@ def test_resuming_a_period_code_none_am_order_reaches_summary_not_the_legacy_per
     assert response.headers["location"] == f"/o/{resume_token}/summary"
 
 
-def test_summary_shows_duration_in_days_for_a_period_code_none_am_order():
+def test_summary_shows_stored_price_and_duration_in_days_for_a_legacy_am_order():
     resume_token = _create_am_order_directly(price_customer_minor=500000)
     client = TestClient(app)
     response = client.get(f"/o/{resume_token}/summary")
     assert response.status_code == 200
     assert "10 дней" in response.text
+    assert "5 000" in response.text  # the stored price, never repriced from pricing.AM
     assert "None" not in response.text  # period_label must never render as the literal string "None"
+
+
+def _read_order(resume_token: str):
+    from app.orders.repository import get_order_by_token
+
+    conn = get_connection(_settings.app.db_file)
+    try:
+        return get_order_by_token(conn, resume_token)
+    finally:
+        conn.close()
+
+
+def test_legacy_am_order_edit_date_get_redirects_to_edit_coverage(real_config):
+    resume_token = _create_am_order_directly(price_customer_minor=500000)
+    client = TestClient(app)
+    response = client.get(f"/o/{resume_token}/edit-date", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/o/{resume_token}/edit-coverage"
+
+
+def test_legacy_am_order_edit_date_post_redirects_without_changing_the_order(real_config):
+    resume_token = _create_am_order_directly(price_customer_minor=500000)
+    client = TestClient(app)
+    response = client.post(
+        f"/o/{resume_token}/edit-date",
+        data={"start_date": _iso(5), "end_date": _iso(40)},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/o/{resume_token}/edit-coverage"
+
+    order = _read_order(resume_token)
+    assert order.period_code is None
+    assert order.start_date == _START
+    assert order.end_date == _START + timedelta(days=10)
+    assert order.price_customer_minor == 500000
 
 
 # ---------------------------------------------------------------------------

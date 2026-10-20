@@ -246,7 +246,9 @@ def test_customer_crafted_issuance_callbacks_are_refused(h, settings, ids, tpl):
         assert not screens(calls), data
     assert _orders(settings, 11) == [] and tpl.applications == []
     # their normal route is unchanged: Всё верно -> payment
-    payment = last_screen(h.press(customer, "fc:confirm"))
+    calls = h.press(customer, "fc:confirm")
+    # the customer's own chat (the staff are notified of the application too)
+    payment = last_screen([c for c in calls if getattr(c, "chat_id", None) == customer.id])
     assert payment.text.startswith("💳 Оплата заказа") and "Владимир М." in payment.text
 
 
@@ -264,8 +266,11 @@ def test_manager_review_offers_direct_issuance_and_the_payment_route(h, settings
 def test_manager_can_choose_the_normal_payment_order(h, settings, ids, tpl):
     manager = make_user(OWNER)
     review = _review(h, manager)
-    payment = last_screen(h.press(manager, _button(review, "💳 Создать заказ с оплатой")))
+    calls = h.press(manager, _button(review, "💳 Создать заказ с оплатой"))
+    # first the payment screen; then -- this manager is also staff -- the application card
+    payment, card = screens(calls)[0], screens(calls)[-1]
     assert payment.text.startswith("💳 Оплата заказа") and "Сбербанк" in payment.text
+    assert card.text.startswith("📝 Новая заявка")
     (order,) = _orders(settings, OWNER)
     assert order.payment_mode is None and order.status == OrderStatus.AWAITING_PAYMENT.value
     assert tpl.applications == []

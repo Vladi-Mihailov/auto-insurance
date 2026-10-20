@@ -157,6 +157,12 @@ def _texts(calls):
     return [c.text for c in screens(calls)]
 
 
+def _customer_screens(calls, user):
+    """Screens in the customer's own chat -- a confirmed application also
+    notifies the staff (app.orders.payment.mark_awaiting_payment)."""
+    return [c for c in screens(calls) if c.chat_id == user.id]
+
+
 def _no_second_confirmation(calls):
     for call in screens(calls):
         assert not call.text.startswith(OLD_SCREENS), call.text
@@ -193,8 +199,8 @@ def test_ocr_review_all_correct_goes_straight_to_payment(h, settings, ids):
     assert _order_count(settings) == 0  # nothing ordered before the confirmation
 
     order, calls = _confirmed(h, settings, user)
-    assert [c.text for c in screens(calls)] == [_expected_payment(order)]  # the ONLY screen after "✅ Всё верно"
-    assert [t for t, _ in buttons(last_screen(calls))] == ["📎 Отправить чек", "🔄 Показать реквизиты ещё раз"]
+    assert [c.text for c in _customer_screens(calls, user)] == [_expected_payment(order)]  # the ONLY screen after "✅ Всё верно"
+    assert [t for t, _ in buttons(_customer_screens(calls, user)[-1])] == ["📎 Отправить чек", "🔄 Показать реквизиты ещё раз"]
     _no_second_confirmation(review_calls + calls)
     assert order.status == OrderStatus.AWAITING_PAYMENT.value
     assert order.price_customer_minor == 134900  # the order's own amount -- the one shown
@@ -207,7 +213,7 @@ def test_manual_review_all_correct_goes_straight_to_payment(h, settings, ids):
     assert review.text.startswith("Проверьте данные:")
     assert "ФИО: Ivanov Ivan" in review.text and "Стоимость: 1 349 ₽" in review.text
     order, calls = _confirmed(h, settings, user)
-    assert [c.text for c in screens(calls)] == [_expected_payment(order)]
+    assert [c.text for c in _customer_screens(calls, user)] == [_expected_payment(order)]
     _no_second_confirmation(review_calls + calls)
 
 
@@ -222,7 +228,7 @@ def test_edit_a_field_then_all_correct_goes_to_payment(h, settings, ids):
     assert "Госномер: XY777ZZ" in review.text
     assert _order_count(settings) == 0
     order, calls = _confirmed(h, settings, user)
-    assert [c.text for c in screens(calls)] == [_expected_payment(order)]
+    assert [c.text for c in _customer_screens(calls, user)] == [_expected_payment(order)]
     assert (order.identification_number, order.display_registration_number) == ("C01234567", "XY777ZZ")
 
 
@@ -254,7 +260,7 @@ def test_all_correct_with_a_missing_policyholder_field_asks_for_it_then_back_to_
     review = last_screen(h.send_text(user, "Ivanov Ivan"))
     assert review.text.startswith("Проверьте данные:")  # back on the review, nothing else asked
     order, calls = _confirmed(h, settings, user)
-    assert [c.text for c in screens(calls)] == [_expected_payment(order)]
+    assert [c.text for c in _customer_screens(calls, user)] == [_expected_payment(order)]
 
 
 def test_customer_is_never_asked_for_email_or_phone(h, settings, ids):
@@ -343,8 +349,10 @@ def test_manager_gets_receipt_with_amount_recipient_and_order(h, settings, ids):
         assert fragment in card.text, fragment
     assert buttons(card)[:2] == [("✅ Оплата поступила", f"mg:confirm:{order.id}"), ("❌ Оплата не поступила", f"mg:reject:{order.id}")]
     photos = sent_to(calls, MANAGER, SendPhoto)
-    assert len(photos) == 4  # the 3 vehicle documents + the receipt
-    (photo,) = [p for p in photos if p.photo == "rcpt-1"]
+    # only the receipt: the 3 vehicle documents already went with the
+    # submitted application and are not sent twice
+    (photo,) = photos
+    assert photo.photo == "rcpt-1"
     assert photo.caption == f"🧾 Чек об оплате · {order.public_number}\nОжидается: 1 349 ₽ · PETROV PETR"
 
 

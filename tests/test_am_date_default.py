@@ -1,19 +1,15 @@
-"""Armenia (AM) /date step: default end_date pre-fill.
+"""Armenia (AM) /date step: defaults now that AM is a FIXED-period product.
 
-Business rule: the FIRST time a fresh AM draft reaches /date (no dates
-chosen yet), start_date defaults to today (already existing behaviour) and
-end_date now defaults to start_date + duration_ranges.AM.passenger_car.
-default_duration_days (15, see config/config.yaml), so the customer sees a
-real 15-day range and an editable "Срок, дней" number input (defaulting to
-15) instead of two blank fields.
-Once the customer has actually chosen dates (draft has a real end_date),
-revisiting /date must show exactly that choice, never reset it back to the
-15-day default -- same "never overwrite a real choice" rule the
-FIXED-period (GE/TR) branch already followed before this change.
-
-10-365 day min/max validation (app.web.checkout_routes._parse_duration_range_dates)
-is completely untouched by this default -- it only affects what's pre-filled
-on GET, never what's accepted on POST.
+Business moved AM from an EXACT DATE RANGE (customer-picked start AND end
+date, 10-365 days, 15-day default end_date pre-fill) to fixed 15d/30d/90d
+periods on 2026-10-20 -- exactly like Georgia. The AM /date screen is now
+the same start-date-only screen GE/TR use: start_date defaults to today in
+Georgia, end_date is a read-only display computed from the chosen period
+(app.checkout.rules._FIXED_DURATION_DATE_RULES["AM"]), and there is no
+editable end_date/"Срок, дней" input any more.
+Once the customer has actually chosen a start date, revisiting /date must
+show exactly that choice, never reset it back to today -- same "never
+overwrite a real choice" rule the GE/TR branch always followed.
 
 All dates are computed relative to today_in_georgia(), never a hardcoded
 literal -- same time-bomb lesson as the rest of this test suite.
@@ -53,9 +49,8 @@ def _iso(offset_days: int) -> str:
 
 @pytest.fixture
 def real_config(monkeypatch):
-    """AM's duration_ranges config (including default_duration_days) lives
-    in the REAL config/config.yaml, not the test fixture -- same fixture
-    shape as tests/test_am_linear_pricing.py."""
+    """AM's pricing.AM periods live in the REAL config/config.yaml, not the
+    test fixture."""
     monkeypatch.delenv("INSURANCE_CONFIG_FILE", raising=False)
     get_settings.cache_clear()
     yield
@@ -67,80 +62,61 @@ def _start(client: TestClient, country: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AM: default end_date pre-fill
+# AM: start-date-only screen, end_date computed from the period
 # ---------------------------------------------------------------------------
 
 
-def test_am_fresh_date_step_defaults_end_date_to_15_days_after_start(real_config):
+@pytest.mark.parametrize("period_code,duration_days", [("15d", 15), ("30d", 30), ("90d", 90)])
+def test_am_fresh_date_step_defaults_start_to_today_and_computes_end(real_config, period_code, duration_days):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": period_code})
 
     response = client.get("/date")
     assert response.status_code == 200
     today = today_in_georgia()
-    expected_end = today + timedelta(days=15)
+    expected_end = today + timedelta(days=duration_days)
     assert f'value="{today.isoformat()}"' in response.text
-    assert f'value="{expected_end.isoformat()}"' in response.text
-    assert 'id="duration_days"' in response.text
-    assert 'value="15"' in response.text  # duration_days input's own value
-    assert "от 10 до 365 дней" in response.text  # min/max hint unaffected
+    assert expected_end.strftime("%d.%m.%Y") in response.text  # read-only computed display
+    assert 'name="end_date"' not in response.text
+    assert 'id="duration_days"' not in response.text
+    assert "Срок, дней" not in response.text
+    assert "от 10 до 365 дней" not in response.text
 
 
-def test_am_default_dates_are_submittable_as_is(real_config):
-    """The pre-filled 15-day default must itself be a valid, acceptable
-    submission (start=today, end=today+15 -- squarely inside 10-365), not
-    just a display-only placeholder."""
+def test_am_default_start_date_is_submittable_as_is(real_config):
+    from app.sessions.repository import get_draft
+    from app.deps import SESSION_COOKIE_NAME
+
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
     today = today_in_georgia()
-    expected_end = today + timedelta(days=15)
 
-    response = client.post(
-        "/date",
-        data={"start_date": today.isoformat(), "end_date": expected_end.isoformat()},
-        follow_redirects=False,
-    )
+    response = client.post("/date", data={"start_date": today.isoformat()}, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/method"
 
+    conn = get_connection(_settings.app.db_file)
+    try:
+        draft = get_draft(conn, client.cookies.get(SESSION_COOKIE_NAME))
+    finally:
+        conn.close()
+    assert draft["start_date"] == today.isoformat()
+    assert draft["end_date"] == (today + timedelta(days=15)).isoformat()
 
-def test_am_in_progress_draft_keeps_its_own_dates_not_the_default(real_config):
-    """Once the customer has already chosen real dates (here: a 30-day
-    range, not the 15-day default), navigating back to /date must show
-    exactly what they chose -- the default must never clobber a real
-    in-progress choice."""
+
+def test_am_in_progress_draft_keeps_its_own_start_date_not_the_default(real_config):
     client = TestClient(app)
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    # A rejected submission (9 days) does NOT persist to the draft -- use a
-    # valid one first to seed real dates, matching how a customer would
-    # actually reach this state.
-    client.post("/date", data={"start_date": _iso(0), "end_date": _iso(30)}, follow_redirects=False)
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})
+    client.post("/date", data={"start_date": _iso(0)}, follow_redirects=False)
 
     client.get("/category-period")  # simulate navigating back
     response = client.get("/date")
     assert response.status_code == 200
     assert f'value="{_iso(0)}"' in response.text
-    assert f'value="{_iso(30)}"' in response.text
-    assert 'value="30"' in response.text  # duration_days input shows 30, not the 15-day default
-    assert 'value="15"' not in response.text
-
-
-def test_am_boundaries_still_enforced_on_submit_regardless_of_default(real_config):
-    """The default end_date pre-fill has no bearing on the existing 10-365
-    day validation -- a customer who edits the pre-filled end_date outside
-    that range is still rejected exactly as before."""
-    client = TestClient(app)
-    _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-
-    below_min = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(9)})
-    assert below_min.status_code == 422
-
-    above_max = client.post("/date", data={"start_date": _iso(0), "end_date": _iso(366)})
-    assert above_max.status_code == 422
+    assert (_START + timedelta(days=30)).strftime("%d.%m.%Y") in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +124,7 @@ def test_am_boundaries_still_enforced_on_submit_regardless_of_default(real_confi
 # ---------------------------------------------------------------------------
 
 
-def test_ge_date_step_unaffected_by_am_default(real_config):
+def test_ge_date_step_unaffected_by_am_change(real_config):
     client = TestClient(app)
     _start(client, "GE")
     client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
@@ -160,14 +136,13 @@ def test_ge_date_step_unaffected_by_am_default(real_config):
     assert f'value="{today.isoformat()}"' in response.text
     assert expected_end.strftime("%d.%m.%Y") in response.text
     # GE's own end date stays a read-only computed display, not an editable
-    # input, and never shows AM's editable duration_days field/min-max hint
-    # markup.
+    # input, and never shows the (now unused) duration-range markup.
     assert 'name="end_date"' not in response.text
     assert 'id="duration_days"' not in response.text
     assert "Срок, дней" not in response.text
 
 
-def test_tr_date_step_unaffected_by_am_default(real_config):
+def test_tr_date_step_unaffected_by_am_change(real_config):
     client = TestClient(app)
     _start(client, "TR")
     client.post("/category-period", data={"category_code": "passenger_car", "period_code": "30d"})

@@ -18,25 +18,24 @@ DATE_RULE = GeorgiaDateRule()
 
 # The only checkout-level notion of "which countries exist" right now (step 1
 # of the multi-country rollout -- see the GE/AM/TR gap-analysis report this
-# implements). Georgia is FIXED-period (DATE_RULE above); Turkey is also
-# fixed-period but with its own period set/prices-not-yet-set (see
-# _FIXED_DURATION_DATE_RULES/config.yaml's pricing.TR); Armenia is EXACT
-# DATE RANGE (see duration_range_for/parse_duration_range_dates) -- neither
-# AM nor TR has a real customer price yet (out of scope for this step, see
-# the gap-analysis report's PricingProvider design), so neither can reach
-# order creation through the real UI flow today. That's deliberate, not a
-# bug -- see app.web.checkout_routes.post_policyholder's price guard.
+# implements). All three are FIXED-period products (see
+# _FIXED_DURATION_DATE_RULES and config.yaml's pricing.<country>); Armenia
+# was an EXACT DATE RANGE product until 2026-10-20 -- the generic
+# duration_range_for/parse_duration_range_dates machinery below remains for
+# any future such product, but no country is configured with one now.
 SUPPORTED_COUNTRY_CODES = ("GE", "AM", "TR")
 DEFAULT_COUNTRY_CODE = "GE"
 
 # FIXED-period date rule per country -- GE's own untouched GeorgiaDateRule,
-# plus Turkey's own period set via the generic FixedDurationDateRule (see
-# app.dates.rules). A country absent here (Armenia) is never fixed-period at
-# all right now -- callers must check duration_range_for first (see
-# fixed_duration_date_rule's own docstring).
+# plus Turkey's and Armenia's own period sets via the generic
+# FixedDurationDateRule (see app.dates.rules). Armenia has its OWN rule
+# object (same 15/30/90-day periods as Georgia today, see config.yaml's
+# pricing.AM) rather than reusing DATE_RULE, so the two countries' period
+# sets can diverge later without touching each other.
 _FIXED_DURATION_DATE_RULES: dict[str, DateRule] = {
     "GE": DATE_RULE,
     "TR": FixedDurationDateRule(day_periods={"30d": 30, "45d": 45, "90d": 90, "180d": 180, "365d": 365}),
+    "AM": FixedDurationDateRule(day_periods={"15d": 15, "30d": 30, "90d": 90}),
 }
 
 

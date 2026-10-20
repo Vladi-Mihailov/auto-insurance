@@ -437,10 +437,10 @@ def test_message_ge_does_not_show_engine_power_model_year_or_dob():
 
 
 def test_message_am_period_code_none_derives_duration_from_dates_and_shows_engine_power():
-    """AM's passenger_car has no period_code by design (see
-    app.pricing.provider.get_duration_range) -- admin_routes passes
-    period_label=None for it since there's no period to resolve a label
-    for. The formatter must derive "N дней" from start_date/end_date
+    """A legacy AM order (created while AM was still an exact-date-range
+    product, before its 2026-10-20 move to fixed periods) has no
+    period_code -- admin_routes passes period_label=None for it since
+    there's no period to resolve a label for. The formatter must derive "N дней" from start_date/end_date
     itself rather than ever rendering "Период: None" or inventing a fake
     period code."""
     order = _make_order(

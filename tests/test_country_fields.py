@@ -7,10 +7,9 @@ decision, 2026-09-06: the source site, strahovka-turkiye.com, only asks for
 engine/motor info for a separate, unrelated "Turkish plates under customs
 deposit" service, not for buying the OSAGO policy itself -- see
 tests/test_tr_tl_pricing.py's field-behavior coverage for the full flow).
-AM still has no real pricing (see tests/test_country_periods.py), so a full
-AM order is only reachable by seeding price_customer_minor directly into the
-draft -- this file does that purely to test these fields end-to-end through
-the real validation/route code, not to claim AM pricing exists.
+AM walks its real fixed-period checkout (15d, AM's own pricing.AM price --
+see tests/test_country_periods.py) to reach these fields end-to-end through
+the real validation/route code.
 """
 
 import sqlite3
@@ -160,8 +159,8 @@ def test_ge_happy_path_unchanged_and_order_gets_none_in_all_three_new_fields():
 
 def _reach_am_vehicle_screen(client: TestClient) -> None:
     _start(client, "AM")
-    client.post("/category-period", data={"category_code": "passenger_car", "period_code": ""})
-    client.post("/date", data={"start_date": _START.isoformat(), "end_date": (_START + timedelta(days=10)).isoformat()})
+    client.post("/category-period", data={"category_code": "passenger_car", "period_code": "15d"})
+    client.post("/date", data={"start_date": _START.isoformat()})
     client.post("/method", data={"choice": "manual"})
 
 
@@ -202,14 +201,9 @@ def test_am_valid_engine_power_survives_draft(real_config):
 
 
 def test_am_engine_power_saved_correctly_when_order_creation_is_exercised(real_config):
-    """AM has no real price yet (see test_country_periods.py) -- the price
-    is seeded directly into the draft here purely to reach create_order and
-    verify engine_power actually lands on the Order, not to claim AM
-    pricing exists."""
     client = TestClient(app)
     _reach_am_vehicle_screen(client)
     client.post("/vehicle", data=_vehicle_form_data(engine_power="150"))
-    _seed_draft(client, price_customer_minor=250000)
 
     response = client.post(
         "/policyholder", data=valid_policyholder_data(contact_telegram="@am_fields"), follow_redirects=False
@@ -221,13 +215,13 @@ def test_am_engine_power_saved_correctly_when_order_creation_is_exercised(real_c
     assert order.engine_power == 150
     assert order.model_year is None
     assert order.date_of_birth is None
+    assert order.price_customer_minor == 139900  # AM 15d passenger_car = 1399 RUB
 
 
 def test_am_summary_shows_engine_power_only(real_config):
     client = TestClient(app)
     _reach_am_vehicle_screen(client)
     client.post("/vehicle", data=_vehicle_form_data(engine_power="150"))
-    _seed_draft(client, price_customer_minor=250000)
     response = client.post(
         "/policyholder", data=valid_policyholder_data(contact_telegram="@am_summary"), follow_redirects=False
     )
@@ -480,7 +474,6 @@ def test_edit_vehicle_updates_engine_power_for_an_am_order(real_config):
     client = TestClient(app)
     _reach_am_vehicle_screen(client)
     client.post("/vehicle", data=_vehicle_form_data(engine_power="150"))
-    _seed_draft(client, price_customer_minor=250000)
     response = client.post(
         "/policyholder", data=valid_policyholder_data(contact_telegram="@am_edit"), follow_redirects=False
     )

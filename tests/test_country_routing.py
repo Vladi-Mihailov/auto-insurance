@@ -371,11 +371,11 @@ def test_landing_page_turkey_now_links_to_country_aware_start():
 
 
 def test_landing_page_armenia_now_links_to_country_aware_start():
-    """Armenia is now publicly launched too (see the AM linear-pricing
-    task) -- supersedes the old "still routes to the operator" assumption;
-    the operator-only placeholder link is gone entirely now that all three
-    countries route through /start?country=... (see
-    tests/test_am_linear_pricing.py for the full homepage/teaser coverage)."""
+    """Armenia is now publicly launched too -- supersedes the old "still
+    routes to the operator" assumption; the operator-only placeholder link
+    is gone entirely now that all three countries route through
+    /start?country=... (see tests/test_am_fixed_period_pricing.py for the
+    full homepage/teaser coverage)."""
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
